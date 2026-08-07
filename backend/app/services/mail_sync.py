@@ -17,7 +17,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,6 +111,40 @@ async def upsert_mails(db: AsyncSession, account: EmailAccount, mails: list[Norm
     return len(rows)
 
 
+async def apply_read_flags(
+    db: AsyncSession,
+    account_id: int,
+    uid_to_mid: dict[str, str],
+    flags: dict[str, bool],
+) -> int:
+    """Reconcile ``is_read`` for messages that were already in the database.
+
+    ``uid_to_mid`` maps IMAP UIDs to stored Message-IDs (as returned by
+    ``fetch_message_ids``); ``flags`` maps UIDs to their live ``\\Seen`` state.
+    Only rows matching an existing Message-ID are touched, so this never
+    creates or deletes anything.
+    """
+    if not flags:
+        return 0
+    updated = 0
+    for uid, is_read in flags.items():
+        mid = uid_to_mid.get(uid)
+        if not mid:
+            continue
+        result = await db.execute(
+            update(UnifiedEmail)
+            .where(
+                UnifiedEmail.account_id == account_id,
+                UnifiedEmail.message_id == mid,
+            )
+            .values(is_read=is_read)
+        )
+        updated += result.rowcount or 0
+    if updated:
+        await db.commit()
+    return updated
+
+
 # --- public API -------------------------------------------------------------
 
 async def test_connection(
@@ -170,6 +204,11 @@ async def sync_account(
                     )
                 )
                 existing_mids = {r[0] for r in existing_result.all() if r[0]}
+                existing_uids = [
+                    u
+                    for u in uids
+                    if uid_to_mid.get(u, f"synthetic:{u}") in existing_mids
+                ]
                 uids = [
                     u
                     for u in uids
@@ -179,6 +218,11 @@ async def sync_account(
             mails: list[NormalisedMail] = []
             if uids:
                 mails = await asyncio.to_thread(client.fetch_normalised, uids)
+            # Messages already in the DB were deduped out of the full fetch,
+            # so their is_read may be stale — reconcile it from live FLAGS.
+            if existing_uids:
+                flags = await asyncio.to_thread(client.fetch_flags, existing_uids)
+                await apply_read_flags(db, account.id, uid_to_mid, flags)
         finally:
             await asyncio.to_thread(client.logout)
 

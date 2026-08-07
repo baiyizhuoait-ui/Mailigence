@@ -76,6 +76,10 @@ class UnifiedEmail(Base):
     )
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     has_reply: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Mailbox actions: archive moves the mail out of the default inbox view
+    # (kept searchable), star is the manual "flagged" marker.
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_starred: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     raw_headers: Mapped[Any] = mapped_column(JSONB, default=dict)
 

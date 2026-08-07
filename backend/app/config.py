@@ -29,8 +29,10 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     # Database
+    # psycopg (v3) driver: ships binary wheels for Python 3.13 on Windows and
+    # avoids the asyncpg SSLRequest crash seen with portable PostgreSQL builds.
     database_url: str = (
-        "postgresql+asyncpg://emailui:emailui_dev_pw@localhost:5432/emailui"
+        "postgresql+psycopg://mailigence:mailigence_dev_pw@127.0.0.1:5432/mailigence"
     )
 
     # Credential encryption (Fernet). Required once accounts are created.

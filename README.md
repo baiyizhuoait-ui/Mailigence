@@ -28,7 +28,7 @@ Mailigence 是一个自托管的邮件聚合与 AI 分析工具。将 Gmail / Ou
 
 | 层 | 技术 |
 |---|---|
-| 后端 | Python 3.11+ · FastAPI · SQLAlchemy 2.0 (async) · asyncpg |
+| 后端 | Python 3.11+ · FastAPI · SQLAlchemy 2.0 (async) · psycopg 3 |
 | 前端 | React 18 · TypeScript · Vite |
 | 数据库 | PostgreSQL 14+ |
 | 邮件 | IMAP (imaplib) · IMAP IDLE |
@@ -62,8 +62,9 @@ cp .env.example .env   # 然后编辑 .env，见下方「配置」
 # 生成加密主密钥（必填，用于加密邮箱凭据）
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
-# 启动（首次启动自动建表）
-uvicorn app.main:app --reload --port 8000
+# 启动（首次启动自动建表；Windows 用户务必用下面的 run.py，避免 ProactorEventLoop 与 psycopg 不兼容）
+python run.py
+# 或：uvicorn app.main:app --reload --port 8000
 ```
 
 ### 3. 前端
@@ -81,8 +82,9 @@ npm run dev   # http://localhost:5173
 参考 `.env.example`，关键项：
 
 ```ini
-# 数据库连接（对应上面创建的库）
-DATABASE_URL=postgresql+asyncpg://mailigence:mailigence_dev_pw@localhost:5432/mailigence
+# 数据库连接（对应上面创建的库；psycopg 驱动，127.0.0.1 避免 IPv6 解析问题，
+# sslmode=disable 防止便携版 PostgreSQL 在 Windows 上因 SSLRequest 崩溃）
+DATABASE_URL=postgresql+psycopg://mailigence:mailigence_dev_pw@127.0.0.1:5432/mailigence?sslmode=disable
 
 # 加密主密钥 —— 必须设置，用于加密邮箱密码和 OAuth 凭据
 # 生成：python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -130,6 +132,7 @@ mailigence/
 │   │   ├── models/       # SQLAlchemy 模型
 │   │   ├── schemas/      # Pydantic 模型
 │   │   └── services/     # 邮件同步、AI 分析、IMAP IDLE、加密…
+│   ├── run.py            # Windows 兼容启动脚本（推荐）
 │   ├── .env.example      # 环境变量模板
 │   └── requirements.txt
 ├── frontend/
@@ -142,6 +145,12 @@ mailigence/
 ```
 
 ## ❓ 常见问题
+
+**启动报 `Psycopg cannot use the 'ProactorEventLoop'`？** Windows 上 Python 3.13 默认使用 ProactorEventLoop，与 psycopg 异步模式不兼容，且 uvicorn 会强制覆盖事件循环。请用 `python run.py` 启动（脚本已固定 SelectorEventLoop）。
+
+**`pip install -r requirements.txt` 安装失败？** 依赖使用 `psycopg[binary]`，自带各平台（含 Windows / Python 3.13）的预编译 wheel，无需 MSVC 编译工具链。
+
+**数据库连接失败（IPv6 / SSLRequest）？** 确保 `.env` 中 `DATABASE_URL` 使用 `127.0.0.1` 而非 `localhost`，并保留 `?sslmode=disable`（`app/database.py` 的 `connect_args` 也会强制禁用 SSL）。
 
 **邮箱添加失败？** 大部分邮箱需要用「授权码/应用专用密码」而非登录密码登录（163/QQ 需在网页设置里开启 IMAP 并生成授权码）。
 

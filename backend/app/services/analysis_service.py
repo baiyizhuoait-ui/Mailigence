@@ -20,8 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
 from app.models.email import UnifiedEmail
+from app.models.email_category import EmailCategory
 from app.services.ai_analyzer import AnalysisResult, analyze_email
 from app.services.ai_config import load_ai_config
+from app.services.categories import list_category_names
 
 ANALYSIS_BATCH = 50  # max emails analyzed per background run
 
@@ -49,20 +51,30 @@ async def run_analysis(
 
     # Resolve AI config once per batch (DB settings + .env).
     cfg = await load_ai_config(db)
+    # Existing category names — the LLM reuses them and only invents new ones
+    # when nothing fits; new names are auto-registered below.
+    category_names = await list_category_names(db)
 
     for email in emails:
         cached = await _find_cached(db, email)
         if cached is not None:
             result = AnalysisResult(
-                category=cached.category or "其他",
+                category=cached.category or "other",
                 is_advertisement=bool(cached.is_advertisement),
                 priority_score=cached.priority_score if cached.priority_score is not None else 50,
                 summary=cached.summary or "",
-                suggested_action=cached.suggested_action or "仅需知晓",
+                suggested_action=cached.suggested_action or "note",
             )
         else:
             result = await analyze_email(
-                email.subject, email.body_snippet, email.raw_headers, config=cfg
+                email.subject,
+                email.body_snippet,
+                email.raw_headers,
+                config=cfg,
+                categories=category_names,
+            )
+            category_names = await _register_categories(
+                db, category_names, [result.category]
             )
 
         email.category = result.category
@@ -78,6 +90,36 @@ async def run_analysis(
             on_progress(analyzed, total)
 
     return analyzed, total
+
+
+async def _register_categories(
+    db: AsyncSession, known: list[str], names: list[str]
+) -> list[str]:
+    """Auto-register any category name the AI introduced that isn't known yet.
+
+    Mutates ``known`` (returns it) so the batch keeps using the updated list.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    for name in names:
+        name = (name or "").strip()
+        if not name or name in known:
+            continue
+        known.append(name)
+        db.add(EmailCategory(name=name, label=name, is_system=False))
+        try:
+            await db.flush()
+        except IntegrityError:
+            # A concurrent analysis run created it first — reuse the row.
+            await db.rollback()
+            existing = (
+                await db.execute(
+                    select(EmailCategory.name).where(EmailCategory.name == name)
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+    return known
 
 
 async def _find_cached(db: AsyncSession, email: UnifiedEmail) -> UnifiedEmail | None:

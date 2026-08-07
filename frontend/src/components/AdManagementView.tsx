@@ -1,22 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import { PLATFORM_LABEL, type AdStats, type BlockedSender, type UnifiedEmail } from "../types";
+import { PLATFORM_LABEL, type AdStats, type BlockedSender, type EmailCategory, type UnifiedEmail } from "../types";
 import { useI18n } from "../i18n";
-
-const CATEGORY_LABELS: Record<string, string> = {
-  work: "cat.work",
-  meeting: "cat.meeting",
-  finance: "cat.finance",
-  notification: "cat.system",
-  social: "cat.social",
-  travel: "cat.travel",
-  shopping: "cat.shopping",
-  marketing: "cat.ad",
-  newsletter: "cat.newsletter",
-  personal: "cat.personal",
-  other: "cat.other",
-  uncategorized: "cat.uncategorized",
-};
 
 const AD_LIST_LIMIT = 500;
 
@@ -38,6 +23,20 @@ export function AdManagementView() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState<Toast | null>(null);
   const [tab, setTab] = useState<Tab>("ads");
+  const [categories, setCategories] = useState<EmailCategory[]>([]);
+
+  // Dynamic category labels (name -> display label) from the category table.
+  const catLabel = useCallback(
+    (name: string) => {
+      const hit = categories.find((c) => c.name === name);
+      return hit?.label ?? name;
+    },
+    [categories],
+  );
+
+  useEffect(() => {
+    api.listCategories().then(setCategories).catch(() => {});
+  }, []);
 
   const showToast = useCallback((kind: Toast["kind"], text: string) => {
     setToast({ kind, text });
@@ -218,7 +217,7 @@ export function AdManagementView() {
                 .sort((a, b) => b[1] - a[1])
                 .map(([cat, count]) => (
                   <span key={cat} className={`tag category ${cat}`}>
-                    {t(CATEGORY_LABELS[cat] ?? cat)} · {count}
+                    {catLabel(cat)} · {count}
                   </span>
                 ))
             ) : (
@@ -298,7 +297,7 @@ export function AdManagementView() {
                       <div className="email-subject">{m.subject || t("misc.noSubject")}</div>
                       {m.category && (
                         <span className={`tag category ${m.category}`}>
-                          {t(CATEGORY_LABELS[m.category] ?? m.category)}
+                          {catLabel(m.category)}
                         </span>
                       )}
                     </div>

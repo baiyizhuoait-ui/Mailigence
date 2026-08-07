@@ -27,7 +27,7 @@ from app.models.email import UnifiedEmail
 from app.models.email_account import EmailAccount, SyncStatus
 from app.models.import_job import ImportJob, ImportStatus
 from app.services.imap_client import open_connection
-from app.services.mail_sync import resolve_credential, upsert_mails
+from app.services.mail_sync import apply_read_flags, resolve_credential, upsert_mails
 
 # UIDs fetched + upserted per progress tick. Smaller = finer progress granularity.
 PROGRESS_BATCH = 50
@@ -85,6 +85,12 @@ class ImportJobManager:
                         existing_mids = await _existing_message_ids(
                             db, account_id
                         )
+                        existing_uids = [
+                            u
+                            for u in uids
+                            if uid_to_mid.get(u, f"synthetic:{u}")
+                            in existing_mids
+                        ]
                         new_uids = [
                             u
                             for u in uids
@@ -95,6 +101,16 @@ class ImportJobManager:
                         if skipped:
                             job.total = len(new_uids)
                             await db.commit()
+                        # Existing rows were deduped out of the full fetch —
+                        # reconcile their read state from live FLAGS so a
+                        # re-import corrects stale is_read values.
+                        if existing_uids:
+                            flags = await asyncio.to_thread(
+                                client.fetch_flags, existing_uids
+                            )
+                            await apply_read_flags(
+                                db, account_id, uid_to_mid, flags
+                            )
                         uids = new_uids
 
                     processed = 0

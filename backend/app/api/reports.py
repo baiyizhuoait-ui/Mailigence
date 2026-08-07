@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.email import UnifiedEmail
 from app.schemas.report import ReportSummary, TopSender, DailyTrendPoint
+from app.services.categories import category_label_map
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -76,16 +77,20 @@ async def report_summary(
     unread = counts_row.unread or 0
     ads = counts_row.ads or 0
 
-    # --- category distribution ---
+    # --- category distribution (keys are display labels, not internal names) ---
     category_stmt = (
         select(UnifiedEmail.category, func.count(UnifiedEmail.id))
         .where(base_where)
         .group_by(UnifiedEmail.category)
     )
+    name_to_label = await category_label_map(db)
     category_dist: dict[str, int] = {}
     for category, count in (await db.execute(category_stmt)).all():
-        key = category if category is not None else "uncategorized"
-        category_dist[key] = count
+        if category is None:
+            key = name_to_label.get("uncategorized", "uncategorized")
+        else:
+            key = name_to_label.get(category, category)
+        category_dist[key] = category_dist.get(key, 0) + count
 
     # --- top senders (limit 10) ---
     top_stmt = (

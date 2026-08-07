@@ -78,6 +78,23 @@ const zh: Dict = {
   "cat.personal": "个人",
   "cat.other": "其他",
   "cat.uncategorized": "未分类",
+  // Category management
+  "catmgmt.title": "邮件类别管理",
+  "catmgmt.hint":
+    "AI 会根据邮件内容自动发现新类别（收件里有什么就设什么）；你也可以在这里手动添加、重命名或删除类别。删除后该类别的邮件将变为未分类。",
+  "catmgmt.new": "新增类别",
+  "catmgmt.namePlaceholder": "类别标识（如：work）",
+  "catmgmt.labelPlaceholder": "显示名称（如：工作）",
+  "catmgmt.add": "添加",
+  "catmgmt.list": "类别列表",
+  "catmgmt.system": "内置",
+  "catmgmt.rename": "重命名",
+  "catmgmt.added": "类别已添加",
+  "catmgmt.addFailed": "添加失败：",
+  "catmgmt.deleted": "类别已删除",
+  "catmgmt.deleteFailed": "删除失败：",
+  "catmgmt.confirmDelete": "确认删除类别",
+  "catmgmt.renameFailed": "重命名失败：",
   // Common actions
   "action.addAccount": "+ 添加账户",
   "action.sync7": "同步最近 7 天",
@@ -295,6 +312,17 @@ const zh: Dict = {
   "mailbox.loadMorePrefix": "加载更多（剩余 ",
   "mailbox.loadMoreSuffix": " 封）",
   "mailbox.ad": "广告",
+  "mailbox.archived": "已归档",
+  "mailbox.emptyArchived": "归档为空",
+  "mailbox.selected": "已选 {n} 封",
+  "batch.read": "标记已读",
+  "batch.unread": "标记未读",
+  "batch.archive": "归档",
+  "batch.unarchive": "取消归档",
+  "batch.star": "星标",
+  "batch.unstar": "取消星标",
+  "batch.delete": "删除",
+  "batch.confirmDelete": "确认删除选中的邮件？此操作不可撤销。",
   // Missing ads
   "ads.alreadyBlocked": "该发件人已被屏蔽",
   "ads.noCategoryData": "暂无分类数据",
@@ -412,6 +440,22 @@ const en: Dict = {
   "cat.personal": "Personal",
   "cat.other": "Other",
   "cat.uncategorized": "Uncategorized",
+  "catmgmt.title": "Email Categories",
+  "catmgmt.hint":
+    "The AI discovers new categories from your mail automatically (whatever appears in your inbox); you can also add, rename or delete categories here. Deleting a category uncategorizes its emails.",
+  "catmgmt.new": "New category",
+  "catmgmt.namePlaceholder": "Identifier (e.g. work)",
+  "catmgmt.labelPlaceholder": "Display name (e.g. Work)",
+  "catmgmt.add": "Add",
+  "catmgmt.list": "Category list",
+  "catmgmt.system": "Built-in",
+  "catmgmt.rename": "Rename",
+  "catmgmt.added": "Category added",
+  "catmgmt.addFailed": "Add failed: ",
+  "catmgmt.deleted": "Category deleted",
+  "catmgmt.deleteFailed": "Delete failed: ",
+  "catmgmt.confirmDelete": "Delete category ",
+  "catmgmt.renameFailed": "Rename failed: ",
   "action.addAccount": "+ Add Account",
   "action.sync7": "Sync last 7 days",
   "action.syncing": "Syncing…",
@@ -616,6 +660,17 @@ const en: Dict = {
   "mailbox.loadMorePrefix": "Load more (",
   "mailbox.loadMoreSuffix": " remaining)",
   "mailbox.ad": "Ad",
+  "mailbox.archived": "Archived",
+  "mailbox.emptyArchived": "Archive is empty",
+  "mailbox.selected": "{n} selected",
+  "batch.read": "Mark read",
+  "batch.unread": "Mark unread",
+  "batch.archive": "Archive",
+  "batch.unarchive": "Unarchive",
+  "batch.star": "Star",
+  "batch.unstar": "Unstar",
+  "batch.delete": "Delete",
+  "batch.confirmDelete": "Delete selected emails? This cannot be undone.",
   "ads.alreadyBlocked": "This sender is already blocked",
   "ads.noCategoryData": "No category data",
   "ads.accountId": "Account ID: ",
@@ -698,7 +753,7 @@ interface I18nContextValue {
   setLang: (l: Lang) => void;
   setTheme: (t: ThemeMode) => void;
   setAccent: (a: AccentColor) => void;
-  t: (key: string) => string;
+  t: (key: string, params?: Record<string, string | number>) => string;
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null);
@@ -751,7 +806,15 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     setLang: (lang) => setSettings((s) => ({ ...s, lang })),
     setTheme: (theme) => setSettings((s) => ({ ...s, theme })),
     setAccent: (accent) => setSettings((s) => ({ ...s, accent })),
-    t: (key: string) => DICTS[settings.lang][key] ?? key,
+    t: (key: string, params?: Record<string, string | number>) => {
+      let text: string = DICTS[settings.lang][key] ?? key;
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          text = text.split(`{${k}}`).join(String(v));
+        }
+      }
+      return text;
+    },
   };
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

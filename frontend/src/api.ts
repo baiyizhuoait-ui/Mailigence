@@ -5,8 +5,11 @@ import type {
   BatchAdAction,
   BatchAdActionResult,
   BlockedSender,
+  CategoryCreateInput,
+  CategoryUpdateInput,
   DashboardSummary,
   EmailAccount,
+  EmailCategory,
   EmailListResponse,
   IdleStatus,
   ImportJob,
@@ -109,6 +112,8 @@ export const api = {
     category?: string;
     q?: string;
     unread_only?: boolean;
+    starred_only?: boolean;
+    archived?: boolean;
     limit?: number;
     offset?: number;
   }) => {
@@ -120,6 +125,31 @@ export const api = {
   },
 
   getEmail: (id: number) => request<UnifiedEmail>(`/emails/${id}`),
+
+  batchEmailAction: (ids: number[], action: string) =>
+    request<{ updated: number }>("/emails/batch", {
+      method: "POST",
+      body: JSON.stringify({ ids, action }),
+    }),
+
+  // ---------------- Dynamic categories ----------------
+
+  listCategories: () => request<EmailCategory[]>("/categories"),
+
+  createCategory: (payload: CategoryCreateInput) =>
+    request<EmailCategory>("/categories", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateCategory: (id: number, payload: CategoryUpdateInput) =>
+    request<EmailCategory>(`/categories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteCategory: (id: number) =>
+    request<{ deleted: number }>(`/categories/${id}`, { method: "DELETE" }),
 
   markEmailRead: (id: number) =>
     request<UnifiedEmail>(`/emails/${id}/read`, { method: "PATCH" }),

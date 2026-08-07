@@ -455,11 +455,46 @@ class ImapClient:
         for i in range(0, len(uid_list), FETCH_BATCH):
             batch = uid_list[i : i + FETCH_BATCH]
             uid_set = ",".join(batch)
-            typ, data = self._conn.uid("FETCH", uid_set, "(RFC822 INTERNALDATE FLAGS)")
+            # BODY.PEEK[] (not RFC822/BODY[]) so fetching never marks a message
+            # as \Seen on the server — read state stays in sync with the mailbox.
+            typ, data = self._conn.uid("FETCH", uid_set, "(BODY.PEEK[] INTERNALDATE FLAGS)")
             if typ != "OK":
                 raise RuntimeError(f"FETCH failed: {data!r}")
             results.extend(self._parse_fetch_response(data, direction))
         return results
+
+    def fetch_flags(self, uids: Iterable[str]) -> dict[str, bool]:
+        """Fetch only the FLAGS for a set of UIDs — no message body.
+
+        Returns ``{uid: is_read}``. Cheap round-trip used to reconcile the
+        read state of messages that are already in the database (they were
+        skipped by the "already imported" dedupe and never re-fetched).
+        """
+        uid_list = [u for u in uids if u]
+        if not uid_list or self._conn is None:
+            return {}
+        result: dict[str, bool] = {}
+        for i in range(0, len(uid_list), FETCH_BATCH):
+            batch = uid_list[i : i + FETCH_BATCH]
+            uid_set = ",".join(batch)
+            typ, data = self._conn.uid("FETCH", uid_set, "(FLAGS)")
+            if typ != "OK":
+                _log.warning("fetch_flags FETCH failed: %r", data)
+                continue
+            for item in data:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    continue
+                meta, _body = item
+                meta_str = (
+                    meta.decode("utf-8", errors="replace")
+                    if isinstance(meta, bytes)
+                    else str(meta)
+                )
+                uid_match = re.search(r"UID\s+(\d+)", meta_str)
+                if not uid_match:
+                    continue
+                result[uid_match.group(1)] = "\\Seen" in meta_str
+        return result
 
     def fetch_message_ids(self, uids: Iterable[str]) -> dict[str, str]:
         """Fetch only the Message-ID header for a set of UIDs.

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { EmailDetailPanel } from "./EmailDetailPanel";
 import { useI18n } from "../i18n";
 import {
   PLATFORM_LABEL,
@@ -34,6 +35,7 @@ export function DashboardView() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [lastMailAt, setLastMailAt] = useState<string | null>(null);
   const [handlingIds, setHandlingIds] = useState<Set<number>>(new Set());
+  const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
   const scheduleTimer = useRef<ReturnType<typeof setInterval> | undefined>();
 
   const fullRefresh = useCallback(async () => {
@@ -265,7 +267,11 @@ export function DashboardView() {
                   const email = item.email!;
                   const isHandling = handlingIds.has(item.email_id);
                   return (
-                    <div key={item.email_id} className="dash-queue-item">
+                    <div
+                      key={item.email_id}
+                      className="dash-queue-item"
+                      onClick={() => setSelectedEmailId(item.email_id)}
+                    >
                       <div className="dash-queue-rank">{idx + 1}</div>
                       <div
                         className="dash-queue-bar"
@@ -304,7 +310,10 @@ export function DashboardView() {
                         </span>
                         <button
                           className="dash-handle-btn"
-                          onClick={() => handleEmail(item.email_id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleEmail(item.email_id);
+                          }}
                           disabled={isHandling}
                           title={t("dash.handle")}
                         >
@@ -319,6 +328,19 @@ export function DashboardView() {
           </div>
         </div>
       </div>
+
+      {/* Email reader — opens when a priority-queue item is clicked */}
+      {selectedEmailId !== null && (
+        <EmailDetailPanel
+          emailId={selectedEmailId}
+          onClose={() => setSelectedEmailId(null)}
+          onReadChange={(id) =>
+            setPending((prev) =>
+              prev.map((e) => (e.id === id ? { ...e, is_read: true } : e)),
+            )
+          }
+        />
+      )}
     </div>
   );
 }

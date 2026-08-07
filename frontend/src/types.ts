@@ -40,12 +40,37 @@ export interface UnifiedEmail {
   received_at: string | null;
   is_read: boolean;
   has_reply: boolean;
+  is_archived: boolean;
+  is_starred: boolean;
   category: string | null;
   is_advertisement: boolean | null;
   priority_score: number | null;
   summary: string | null;
   suggested_action: string | null;
   analyzed_at: string | null;
+}
+
+// ---------------- Dynamic email categories ----------------
+
+export interface EmailCategory {
+  id: number;
+  name: string; // key stored on UnifiedEmail.category
+  label: string; // display name
+  color: string | null;
+  is_system: boolean; // built-in seed vs AI/user-created
+  email_count: number;
+  created_at: string | null;
+}
+
+export interface CategoryCreateInput {
+  name: string;
+  label?: string;
+  color?: string;
+}
+
+export interface CategoryUpdateInput {
+  label?: string;
+  color?: string;
 }
 
 export interface EmailListResponse {

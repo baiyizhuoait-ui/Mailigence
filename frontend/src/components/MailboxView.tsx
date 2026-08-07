@@ -5,6 +5,7 @@ import { useI18n } from "../i18n";
 import {
   PLATFORM_LABEL,
   type EmailAccount,
+  type EmailCategory,
   type UnifiedEmail,
 } from "../types";
 
@@ -28,6 +29,8 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
   const [total, setTotal] = useState(0);
   const [accountId, setAccountId] = useState<number | undefined>(undefined);
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [starredOnly, setStarredOnly] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [category, setCategory] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -35,41 +38,28 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [categories, setCategories] = useState<EmailCategory[]>([]);
   const offsetRef = useRef(0);
+
+  // Dynamic category list — populated by the AI as it discovers new categories
+  // and by the user via Settings → category management.
+  useEffect(() => {
+    api.listCategories().then(setCategories).catch(() => {});
+  }, []);
 
   const CATEGORY_OPTIONS = useMemo(
     () => [
       { value: "", label: t("cat.all") },
-      { value: "work", label: t("cat.work") },
-      { value: "meeting", label: t("cat.meeting") },
-      { value: "finance", label: t("cat.finance") },
-      { value: "notification", label: t("cat.system") },
-      { value: "social", label: t("cat.social") },
-      { value: "travel", label: t("cat.travel") },
-      { value: "shopping", label: t("cat.shopping") },
-      { value: "marketing", label: t("cat.ad") },
-      { value: "newsletter", label: t("cat.newsletter") },
-      { value: "personal", label: t("cat.personal") },
-      { value: "other", label: t("cat.other") },
+      ...categories.map((c) => ({ value: c.name, label: c.label })),
     ],
-    [t],
+    [categories, t],
   );
 
   const CATEGORY_LABELS = useMemo<Record<string, string>>(
-    () => ({
-      work: t("cat.work"),
-      meeting: t("cat.meeting"),
-      finance: t("cat.finance"),
-      notification: t("cat.system"),
-      social: t("cat.social"),
-      travel: t("cat.travel"),
-      shopping: t("cat.shopping"),
-      marketing: t("cat.ad"),
-      newsletter: t("cat.newsletter"),
-      personal: t("cat.personal"),
-      other: t("cat.other"),
-    }),
-    [t],
+    () => Object.fromEntries(categories.map((c) => [c.name, c.label])),
+    [categories],
   );
 
   // Debounce search input — avoids hammering the API on every keystroke.
@@ -78,54 +68,47 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  const loadPage = useCallback(
+    (offset: number, append: boolean) => {
+      setLoading(true);
+      setError("");
+      api
+        .listEmails({
+          account_id: accountId,
+          category: category || undefined,
+          unread_only: unreadOnly,
+          starred_only: starredOnly,
+          archived: showArchived,
+          q: debouncedQuery || undefined,
+          limit: PAGE_SIZE,
+          offset,
+        })
+        .then((res) => {
+          setEmails((prev) => (append ? [...prev, ...res.items] : res.items));
+          setTotal(res.total);
+          offsetRef.current = offset;
+        })
+        .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+        .finally(() => setLoading(false));
+    },
+    [accountId, unreadOnly, starredOnly, showArchived, category, debouncedQuery],
+  );
+
   // Load emails when any filter changes (resets to first page).
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError("");
-    offsetRef.current = 0;
-    api
-      .listEmails({
-        account_id: accountId,
-        category: category || undefined,
-        unread_only: unreadOnly,
-        q: debouncedQuery || undefined,
-        limit: PAGE_SIZE,
-        offset: 0,
-      })
-      .then((res) => {
-        if (cancelled) return;
-        setEmails(res.items);
-        setTotal(res.total);
-      })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [accountId, unreadOnly, category, debouncedQuery]);
+    setSelected(new Set());
+    loadPage(0, false);
+  }, [loadPage]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || emails.length >= total) return;
     setLoadingMore(true);
-    const newOffset = offsetRef.current + PAGE_SIZE;
     try {
-      const res = await api.listEmails({
-        account_id: accountId,
-        category: category || undefined,
-        unread_only: unreadOnly,
-        q: debouncedQuery || undefined,
-        limit: PAGE_SIZE,
-        offset: newOffset,
-      });
-      setEmails((prev) => [...prev, ...res.items]);
-      offsetRef.current = newOffset;
-    } catch {
-      /* surfaced on next interaction */
+      await loadPage(offsetRef.current + PAGE_SIZE, true);
     } finally {
       setLoadingMore(false);
     }
-  }, [accountId, category, unreadOnly, debouncedQuery, emails.length, total, loadingMore]);
+  }, [loadingMore, emails.length, total, loadPage]);
 
   async function refresh() {
     if (accountId) {
@@ -134,28 +117,53 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
       await Promise.all(accounts.map((a) => api.syncAccount(a.id, 7).catch(() => {})));
     }
     onRefreshAccounts();
-    setLoading(true);
-    api
-      .listEmails({
-        account_id: accountId,
-        category: category || undefined,
-        unread_only: unreadOnly,
-        q: debouncedQuery || undefined,
-        limit: PAGE_SIZE,
-        offset: 0,
-      })
-      .then((res) => {
-        setEmails(res.items);
-        setTotal(res.total);
-        offsetRef.current = 0;
-      })
-      .finally(() => setLoading(false));
+    setSelected(new Set());
+    loadPage(0, false);
   }
 
   function handleReadChange(id: number) {
     setEmails((prev) =>
       prev.map((e) => (e.id === id ? { ...e, is_read: true } : e)),
     );
+  }
+
+  // ---- selection helpers ----
+  const allSelected = emails.length > 0 && emails.every((e) => selected.has(e.id));
+  const someSelected = !allSelected && emails.some((e) => selected.has(e.id));
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        emails.forEach((e) => next.delete(e.id));
+      } else {
+        emails.forEach((e) => next.add(e.id));
+      }
+      return next;
+    });
+  }
+
+  async function doBatch(action: string) {
+    if (selected.size === 0) return;
+    setBatchBusy(true);
+    try {
+      await api.batchEmailAction([...selected], action);
+      setSelected(new Set());
+      loadPage(0, false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBatchBusy(false);
+    }
   }
 
   const hasMore = emails.length < total;
@@ -197,6 +205,22 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
             />
             <span>{t("mailbox.unread")}</span>
           </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={starredOnly}
+              onChange={(e) => setStarredOnly(e.target.checked)}
+            />
+            <span>★</span>
+          </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+            />
+            <span>{t("mailbox.archived")}</span>
+          </label>
         </div>
         <div className="filter-group right">
           <span className="count mono">{total} {t("account.count")}</span>
@@ -206,11 +230,58 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
         </div>
       </div>
 
+      {/* Batch action bar */}
+      {selected.size > 0 && (
+        <div className="batch-bar">
+          <label className="toggle batch-check">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = someSelected;
+              }}
+              onChange={toggleSelectAll}
+            />
+          </label>
+          <span className="batch-count">{t("mailbox.selected", { n: selected.size })}</span>
+          <button className="btn small ghost" onClick={() => doBatch("read")} disabled={batchBusy}>
+            {t("batch.read")}
+          </button>
+          <button className="btn small ghost" onClick={() => doBatch("unread")} disabled={batchBusy}>
+            {t("batch.unread")}
+          </button>
+          {!showArchived ? (
+            <button className="btn small ghost" onClick={() => doBatch("archive")} disabled={batchBusy}>
+              {t("batch.archive")}
+            </button>
+          ) : (
+            <button className="btn small ghost" onClick={() => doBatch("unarchive")} disabled={batchBusy}>
+              {t("batch.unarchive")}
+            </button>
+          )}
+          <button className="btn small ghost" onClick={() => doBatch("star")} disabled={batchBusy}>
+            ★ {t("batch.star")}
+          </button>
+          <button className="btn small ghost" onClick={() => doBatch("unstar")} disabled={batchBusy}>
+            {t("batch.unstar")}
+          </button>
+          <button
+            className="btn small danger"
+            onClick={() => {
+              if (confirm(t("batch.confirmDelete"))) doBatch("delete");
+            }}
+            disabled={batchBusy}
+          >
+            {t("batch.delete")}
+          </button>
+        </div>
+      )}
+
       {error && <div className="alert error">{error}</div>}
 
       {emails.length === 0 && !loading ? (
         <div className="empty-state">
-          <p className="empty-title">{t("mailbox.empty")}</p>
+          <p className="empty-title">{showArchived ? t("mailbox.emptyArchived") : t("mailbox.empty")}</p>
           <p className="empty-sub">
             {t("mailbox.emptySub")}
           </p>
@@ -221,9 +292,24 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
             {emails.map((m) => (
               <li
                 key={m.id}
-                className={`email-row ${m.is_read ? "read" : "unread"}`}
+                className={`email-row ${m.is_read ? "read" : "unread"} ${selected.has(m.id) ? "selected" : ""}`}
                 onClick={() => setSelectedEmailId(m.id)}
               >
+                <div
+                  className="email-row-check"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelect(m.id);
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(m.id)}
+                    readOnly
+                    onChange={() => {}}
+                  />
+                </div>
+                {m.is_starred && <span className="email-star">★</span>}
                 <div className="email-row-main">
                   <div className="email-row-top">
                     <span className={`platform-tag ${m.platform}`}>

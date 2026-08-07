@@ -3,40 +3,15 @@ import { api } from "../api";
 import {
   PLATFORM_LABEL,
   type EmailAccount,
+  type EmailCategory,
   type ReportRange,
   type ReportSummary,
 } from "../types";
 import { useI18n } from "../i18n";
 
-const CATEGORY_LABELS: Record<string, string> = {
-  work: "cat.work",
-  meeting: "cat.meeting",
-  finance: "cat.finance",
-  notification: "cat.system",
-  social: "cat.social",
-  travel: "cat.travel",
-  shopping: "cat.shopping",
-  marketing: "cat.ad",
-  newsletter: "cat.newsletter",
-  personal: "cat.personal",
-  other: "cat.other",
-  uncategorized: "cat.uncategorized",
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  work: "#3b82f6",
-  meeting: "#06b6d4",
-  finance: "#10b981",
-  notification: "#a855f7",
-  social: "#ec4899",
-  travel: "#f59e0b",
-  shopping: "#d97706",
-  marketing: "#ef4444",
-  newsletter: "#6366f1",
-  personal: "#14b8a6",
-  other: "#6b7280",
-  uncategorized: "#9ca3af",
-};
+// Report category_dist keys are *display labels* (mapped server-side via the
+// dynamic email_categories table); colors come from the same table.
+const FALLBACK_CATEGORY_COLOR = "#9ca3af";
 
 const ACTION_LABELS: Record<string, string> = {
   reply: "priority.reply",
@@ -59,14 +34,6 @@ const PRIORITY_ROWS = [
 
 const ACTION_KEYS = ["reply", "review", "note", "ignore"] as const;
 
-function categoryColor(key: string): string {
-  return CATEGORY_COLORS[key] ?? "#9ca3af";
-}
-
-function categoryLabel(key: string): string {
-  return CATEGORY_LABELS[key] ?? key;
-}
-
 function fmtDate(iso: string): string {
   // YYYY-MM-DD -> MM-DD
   return iso.length >= 10 ? iso.slice(5) : iso;
@@ -83,6 +50,22 @@ export function ReportView({ accounts }: ReportViewProps) {
   const [summary, setSummary] = useState<ReportSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [categories, setCategories] = useState<EmailCategory[]>([]);
+
+  useEffect(() => {
+    api.listCategories().then(setCategories).catch(() => {});
+  }, []);
+
+  // label -> color lookup from the dynamic category table.
+  const colorByLabel = useCallback(
+    (label: string) => {
+      const hit = categories.find(
+        (c) => c.label === label || c.name === label,
+      );
+      return hit?.color ?? FALLBACK_CATEGORY_COLOR;
+    },
+    [categories],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,7 +102,7 @@ export function ReportView({ accounts }: ReportViewProps) {
     const start = cumulative;
     cumulative += pct;
     const end = idx === catEntries.length - 1 ? 100 : cumulative;
-    stops.push(`${categoryColor(key)} ${start}% ${end}%`);
+    stops.push(`${colorByLabel(key)} ${start}% ${end}%`);
   });
   const pieGradient =
     stops.length > 0 ? `conic-gradient(${stops.join(", ")})` : "var(--panel-3)";
@@ -227,11 +210,9 @@ export function ReportView({ accounts }: ReportViewProps) {
                         <li key={key} className="pie-legend-item">
                           <span
                             className="pie-legend-dot"
-                            style={{ background: categoryColor(key) }}
+                            style={{ background: colorByLabel(key) }}
                           />
-                          <span className="pie-legend-name">
-                            {t(categoryLabel(key))}
-                          </span>
+                          <span className="pie-legend-name">{key}</span>
                           <span className="pie-legend-count mono">{count}</span>
                           <span className="pie-legend-pct mono">{pct}%</span>
                         </li>

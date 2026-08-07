@@ -580,6 +580,8 @@ button {
   border-bottom: 1px solid var(--border-soft);
   transition: background 0.15s ease;
   gap: 14px;
+  cursor: pointer;
+  align-items: center;
 }
 
 .email-row:last-child {
@@ -590,8 +592,67 @@ button {
   background: var(--panel-2);
 }
 
+.email-row.selected {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .email-row.unread {
   box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.email-row-check {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.email-row-check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.email-star {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 15px;
+  line-height: 1;
+  width: 18px;
+  text-align: center;
+}
+
+/* Batch action bar */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
+}
+
+.batch-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-right: auto;
+}
+
+.batch-check {
+  margin: 0;
+  display: flex;
+  align-items: center;
+}
+
+.batch-check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .email-row-main {
@@ -2381,6 +2442,87 @@ button {
   line-height: 1.5;
 }
 
+/* Category management */
+
+.cat-add-group {
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.cat-add-group .settings-input {
+  flex: 1;
+  min-width: 160px;
+}
+
+.cat-list {
+  width: 100%;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cat-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.cat-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.cat-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.cat-name-key {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.cat-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--panel-3);
+  padding: 1px 7px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+.cat-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.cat-rename-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 6px 10px;
+}
+
 /* AI mode cards */
 
 .ai-mode-grid {
@@ -2890,11 +3032,13 @@ button {
   border-radius: 10px;
   border: 1px solid var(--border-soft);
   overflow: hidden;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  cursor: pointer;
 }
 
 .dash-queue-item:hover {
   border-color: var(--accent);
+  background: var(--panel-3);
 }
 
 .dash-queue-rank {

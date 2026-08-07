@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
-import { PLATFORM_LABEL, type UnifiedEmail } from "../types";
+import {
+  PLATFORM_LABEL,
+  type EmailCategory,
+  type UnifiedEmail,
+} from "../types";
 
 interface Toast {
   kind: "success" | "error" | "info";
@@ -13,20 +17,6 @@ interface Props {
   onClose: () => void;
   onReadChange: (id: number) => void;
 }
-
-const CATEGORY_LABELS: Record<string, string> = {
-  work: "cat.work",
-  meeting: "cat.meeting",
-  finance: "cat.finance",
-  notification: "cat.system",
-  social: "cat.social",
-  travel: "cat.travel",
-  shopping: "cat.shopping",
-  marketing: "cat.ad",
-  newsletter: "cat.newsletter",
-  personal: "cat.personal",
-  other: "cat.other",
-};
 
 const ACTION_LABELS: Record<string, string> = {
   reply: "priority.reply",
@@ -48,6 +38,14 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [categories, setCategories] = useState<EmailCategory[]>([]);
+
+  const catLabel = (name: string) =>
+    categories.find((c) => c.name === name)?.label ?? name;
+
+  useEffect(() => {
+    api.listCategories().then(setCategories).catch(() => {});
+  }, []);
 
   const showToast = (kind: Toast["kind"], text: string) => {
     setToast({ kind, text });
@@ -181,10 +179,10 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                 {analyzed ? (
                   <div className="ai-grid">
                     {email.category && (
-                      <div className="ai-cell">
+                      <div className="ai-field">
                         <span className="ai-label">{t("detail.category")}</span>
                         <span className={`tag category ${email.category}`}>
-                          {t(CATEGORY_LABELS[email.category] ?? email.category)}
+                          {catLabel(email.category)}
                         </span>
                       </div>
                     )}

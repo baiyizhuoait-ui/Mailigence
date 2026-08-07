@@ -7,7 +7,12 @@ import {
   type Lang,
   type ThemeMode,
 } from "../i18n";
-import type { AiProvider, AiSettings, AnalysisMode } from "../types";
+import type {
+  AiProvider,
+  AiSettings,
+  AnalysisMode,
+  EmailCategory,
+} from "../types";
 
 interface AiPreset {
   id: string;
@@ -48,6 +53,27 @@ export function SettingsView() {
   const [status, setStatus] = useState<AiSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // ---- category management state ----
+  const [categories, setCategories] = useState<EmailCategory[]>([]);
+  const [catName, setCatName] = useState("");
+  const [catLabel, setCatLabel] = useState("");
+  const [catBusy, setCatBusy] = useState(false);
+  const [catMsg, setCatMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [editingLabel, setEditingLabel] = useState<number | null>(null);
+  const [editValue, setEditValue] = useState("");
+
+  const loadCategories = useCallback(async () => {
+    try {
+      setCategories(await api.listCategories());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -108,6 +134,68 @@ export function SettingsView() {
   }
 
   const active = status?.api_key_configured && status.analysis_mode !== "rules_only";
+
+  // ---- category handlers ----
+  async function addCategory() {
+    const name = catName.trim();
+    if (!name || catBusy) return;
+    setCatBusy(true);
+    setCatMsg(null);
+    try {
+      await api.createCategory({
+        name,
+        label: catLabel.trim() || name,
+      });
+      setCatName("");
+      setCatLabel("");
+      await loadCategories();
+      setCatMsg({ ok: true, text: t("catmgmt.added") });
+    } catch (e) {
+      setCatMsg({
+        ok: false,
+        text: `${t("catmgmt.addFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setCatBusy(false);
+    }
+  }
+
+  async function renameCategory(id: number) {
+    const label = editValue.trim();
+    if (!label || catBusy) return;
+    setCatBusy(true);
+    setCatMsg(null);
+    try {
+      await api.updateCategory(id, { label });
+      setEditingLabel(null);
+      await loadCategories();
+    } catch (e) {
+      setCatMsg({
+        ok: false,
+        text: `${t("catmgmt.renameFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setCatBusy(false);
+    }
+  }
+
+  async function deleteCategory(id: number, label: string) {
+    if (!window.confirm(t("catmgmt.confirmDelete") + `「${label}」？`)) return;
+    setCatBusy(true);
+    setCatMsg(null);
+    try {
+      await api.deleteCategory(id);
+      await loadCategories();
+      setCatMsg({ ok: true, text: t("catmgmt.deleted") });
+    } catch (e) {
+      setCatMsg({
+        ok: false,
+        text: `${t("catmgmt.deleteFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setCatBusy(false);
+    }
+  }
 
   return (
     <div className="settings-view">
@@ -300,6 +388,98 @@ export function SettingsView() {
             </button>
           </div>
         </div>
+      </section>
+
+      {/* Category management */}
+      <section className="settings-section">
+        <h3 className="settings-section-title">{t("catmgmt.title")}</h3>
+        <div className="settings-row">
+          <span className="settings-label" />
+          <span className="settings-hint">{t("catmgmt.hint")}</span>
+        </div>
+
+        <div className="settings-row">
+          <span className="settings-label">{t("catmgmt.new")}</span>
+          <div className="settings-field-group cat-add-group">
+            <input
+              className="settings-input"
+              placeholder={t("catmgmt.namePlaceholder")}
+              value={catName}
+              onChange={(e) => setCatName(e.target.value)}
+            />
+            <input
+              className="settings-input"
+              placeholder={t("catmgmt.labelPlaceholder")}
+              value={catLabel}
+              onChange={(e) => setCatLabel(e.target.value)}
+            />
+            <button className="btn primary" onClick={addCategory} disabled={catBusy || !catName.trim()}>
+              {t("catmgmt.add")}
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-row">
+          <span className="settings-label">{t("catmgmt.list")}</span>
+          <ul className="cat-list">
+            {categories.map((c) => (
+              <li key={c.id} className="cat-item">
+                <span
+                  className="cat-swatch"
+                  style={{ background: c.color ?? "#9ca3af" }}
+                />
+                {editingLabel === c.id ? (
+                  <input
+                    className="settings-input cat-rename-input"
+                    value={editValue}
+                    autoFocus
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") renameCategory(c.id);
+                      if (e.key === "Escape") setEditingLabel(null);
+                    }}
+                    onBlur={() => renameCategory(c.id)}
+                  />
+                ) : (
+                  <span className="cat-name">
+                    {c.label}
+                    <span className="cat-name-key mono">({c.name})</span>
+                    {c.is_system && (
+                      <span className="cat-badge">{t("catmgmt.system")}</span>
+                    )}
+                  </span>
+                )}
+                <span className="cat-count mono">
+                  {c.email_count} {t("account.count")}
+                </span>
+                <button
+                  className="btn small ghost"
+                  onClick={() => {
+                    setEditingLabel(c.id);
+                    setEditValue(c.label);
+                  }}
+                  disabled={catBusy}
+                >
+                  {t("catmgmt.rename")}
+                </button>
+                <button
+                  className="btn small danger"
+                  onClick={() => deleteCategory(c.id, c.label)}
+                  disabled={catBusy}
+                >
+                  {t("action.delete")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {catMsg && (
+          <div className="settings-row">
+            <span className="settings-label" />
+            <span className={`sync-result ${catMsg.ok ? "" : "error"}`}>{catMsg.text}</span>
+          </div>
+        )}
       </section>
     </div>
   );

@@ -48,29 +48,35 @@ CATEGORIES = (
 )
 ACTIONS = ("reply", "review", "note", "ignore")
 
-_SYSTEM_PROMPT = """你是一名邮件分析助手。对给定的邮件主题与正文摘要，进行一次性多任务分析，
+_PROMPT_HEAD = """你是一名邮件分析助手。对给定的邮件主题与正文摘要，进行一次性多任务分析，
 只返回一个 JSON 对象（不要任何额外文字、不要 markdown 代码块），字段如下：
 {
-  "category": "work|meeting|finance|notification|social|travel|shopping|marketing|newsletter|personal|other 之一",
+  "category": "见下方分类说明",
   "is_advertisement": true 或 false,
-  "priority_score": 0-100 的整数（越重要越高；marketing/newsletter 通常很低），
+  "priority_score": 0-100 的整数（越重要越高；营销/简报通常很低），
   "summary": "一句话中文摘要，不超过50字",
   "suggested_action": "reply|review|note|ignore 之一"
-}
-分类说明：
-- work: 工作相关（项目/任务/报告/合同/审批）
-- meeting: 会议邀请/日程/议程
-- finance: 财务（账单/发票/银行/报销/支付）
-- notification: 系统通知（验证码/安全提醒/服务通知）
-- social: 社交（人脉/好友/消息/邀请）
-- travel: 旅行（机票/酒店/行程/预订）
-- shopping: 购物（订单/物流/退换货）
-- marketing: 营销广告（促销/推广/限时优惠）
-- newsletter: 订阅简报（资讯/周报/期刊）
-- personal: 个人邮件
-- other: 其他
-判定要点：含 List-Unsubscribe/促销/退订等特征视为 marketing 并低优先级；
+}"""
+
+_PROMPT_WITH_CATEGORIES = """
+分类说明：从现有类别中选择语义最匹配的一个，直接返回它的类别标识；若现有类别都无法准确描述，
+则新建一个简洁、易理解的类别标识（2-8 个汉字或 1-3 个英文单词，小写）。
+现有类别（标识: 名称）：{categories}
+判定要点：含 List-Unsubscribe/促销/退订等特征视为营销并低优先级；
 会议/工作邮件需要用户回应的高优先级；验证码/通知类为中低优先级。"""
+
+_PROMPT_NO_CATEGORIES = """
+分类说明：为这封邮件新建一个简洁、易理解的类别标识（2-8 个汉字或 1-3 个英文单词，小写）。
+例如：工作、会议、财务、验证码、促销、订阅简报、社交、旅行、购物等。
+判定要点：含 List-Unsubscribe/促销/退订等特征视为营销并低优先级；
+会议/工作邮件需要用户回应的高优先级；验证码/通知类为中低优先级。"""
+
+
+def _build_system_prompt(categories: list[str] | None) -> str:
+    if categories:
+        listed = "；".join(categories)
+        return _PROMPT_HEAD + _PROMPT_WITH_CATEGORIES.format(categories=listed)
+    return _PROMPT_HEAD + _PROMPT_NO_CATEGORIES
 
 
 @dataclass
@@ -109,9 +115,12 @@ async def analyze_email(
     snippet: str,
     raw_headers: dict[str, Any] | None,
     config: AiConfig | None = None,
+    categories: list[str] | None = None,
 ) -> AnalysisResult:
     """Analyze one email according to the effective AI config.
 
+    ``categories`` lists the currently-registered category names; the LLM is
+    told to reuse them and only invent a new one when nothing fits.
     auto: LLM when configured, graceful rule fallback otherwise.
     ai_only: always LLM (errors propagate).
     rules_only: pure programmatic analysis.
@@ -119,7 +128,7 @@ async def analyze_email(
     cfg = config or _default_config()
     if cfg.use_ai:
         try:
-            return await _analyze_with_llm(subject, snippet, cfg)
+            return await _analyze_with_llm(subject, snippet, cfg, categories)
         except Exception:
             if cfg.analysis_mode == "ai_only":
                 raise
@@ -131,19 +140,22 @@ async def analyze_email(
 
 # --- LLM path ---------------------------------------------------------------
 
-async def _analyze_with_llm(subject: str, snippet: str, cfg: AiConfig) -> AnalysisResult:
+async def _analyze_with_llm(
+    subject: str, snippet: str, cfg: AiConfig, categories: list[str] | None
+) -> AnalysisResult:
     # Truncate to control latency / cost.
     snippet = (snippet or "")[:800]
     user_content = f"主题：{subject or '(无主题)'}\n正文摘要：{snippet or '(无正文)'}"
+    system_prompt = _build_system_prompt(categories)
 
     if cfg.provider == "anthropic":
-        content = await _anthropic_chat(cfg, user_content)
+        content = await _anthropic_chat(cfg, user_content, system_prompt)
     else:
-        content = await _openai_chat(cfg, user_content)
+        content = await _openai_chat(cfg, user_content, system_prompt)
 
     parsed = json.loads(content)
     return AnalysisResult(
-        category=_clamp_category(parsed.get("category")),
+        category=_clamp_category(parsed.get("category"), categories),
         is_advertisement=bool(parsed.get("is_advertisement")),
         priority_score=_clamp_int(parsed.get("priority_score"), 0, 100),
         summary=str(parsed.get("summary") or "")[:300],
@@ -151,7 +163,7 @@ async def _analyze_with_llm(subject: str, snippet: str, cfg: AiConfig) -> Analys
     )
 
 
-async def _openai_chat(cfg: AiConfig, user_content: str) -> str:
+async def _openai_chat(cfg: AiConfig, user_content: str, system_prompt: str) -> str:
     """OpenAI-compatible chat completions (OpenAI / DeepSeek / Kimi / Ollama ...)."""
     headers = {
         "Authorization": f"Bearer {cfg.api_key}",
@@ -160,7 +172,7 @@ async def _openai_chat(cfg: AiConfig, user_content: str) -> str:
     body = {
         "model": cfg.model,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
         "response_format": {"type": "json_object"},
@@ -176,7 +188,7 @@ async def _openai_chat(cfg: AiConfig, user_content: str) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-async def _anthropic_chat(cfg: AiConfig, user_content: str) -> str:
+async def _anthropic_chat(cfg: AiConfig, user_content: str, system_prompt: str) -> str:
     """Anthropic Messages API (provider=anthropic)."""
     headers = {
         "x-api-key": cfg.api_key,
@@ -188,7 +200,7 @@ async def _anthropic_chat(cfg: AiConfig, user_content: str) -> str:
         "max_tokens": 400,
         "temperature": 0,
         "messages": [{"role": "user", "content": user_content}],
-        "system": _SYSTEM_PROMPT,
+        "system": system_prompt,
     }
     url = cfg.base_url.rstrip("/") + "/messages"
     async with httpx.AsyncClient(timeout=30) as client:
@@ -260,9 +272,22 @@ def _analyze_with_rules(subject: str, snippet: str, raw_headers: dict[str, Any] 
 
 # --- output sanitisation ----------------------------------------------------
 
-def _clamp_category(value: Any) -> str:
-    value = str(value or "").strip()
-    return value if value in CATEGORIES else "other"
+def _clamp_category(value: Any, known: list[str] | None = None) -> str:
+    """Normalize an LLM category value.
+
+    Known categories are returned verbatim (reuse); unknown values are trimmed,
+    truncated and returned as-is so the analysis service can auto-register them
+    as new categories. Falls back to ``other`` for empty/garbage input.
+    """
+    value = str(value or "").strip().strip("\"'`")
+    if not value or len(value) > 64:
+        return "other"
+    if known and value in known:
+        return value
+    if value.lower() in CATEGORIES:
+        return value.lower()
+    # Accept a brand-new, sensible category name from the LLM.
+    return value[:64]
 
 
 def _clamp_action(value: Any) -> str:

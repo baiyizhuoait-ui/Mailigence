@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -10,6 +11,14 @@ from app.models.email import UnifiedEmail
 from app.schemas.email import EmailListResponse, EmailOut
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
+
+# Batch actions supported by POST /api/emails/batch
+BATCH_ACTIONS = ("read", "unread", "archive", "unarchive", "star", "unstar", "delete")
+
+
+class BatchActionRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+    action: str
 
 
 @router.get("", response_model=EmailListResponse)
@@ -19,11 +28,16 @@ async def list_emails(
     category: str | None = None,
     q: str | None = None,
     unread_only: bool = False,
+    starred_only: bool = False,
+    archived: bool = False,
     limit: int = Query(100, le=500),
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ) -> EmailListResponse:
-    """List unified emails, newest first. Filters compose."""
+    """List unified emails, newest first. Filters compose.
+
+    By default archived mails are hidden; pass ``archived=1`` to view them.
+    """
     stmt = select(UnifiedEmail)
     count_stmt = select(func.count(UnifiedEmail.id))
 
@@ -39,6 +53,15 @@ async def list_emails(
     if unread_only:
         stmt = stmt.where(UnifiedEmail.is_read.is_(False))
         count_stmt = count_stmt.where(UnifiedEmail.is_read.is_(False))
+    if starred_only:
+        stmt = stmt.where(UnifiedEmail.is_starred.is_(True))
+        count_stmt = count_stmt.where(UnifiedEmail.is_starred.is_(True))
+    if archived:
+        stmt = stmt.where(UnifiedEmail.is_archived.is_(True))
+        count_stmt = count_stmt.where(UnifiedEmail.is_archived.is_(True))
+    else:
+        stmt = stmt.where(UnifiedEmail.is_archived.is_(False))
+        count_stmt = count_stmt.where(UnifiedEmail.is_archived.is_(False))
     if q:
         pattern = f"%{q}%"
         cond = (
@@ -56,6 +79,39 @@ async def list_emails(
     items = [EmailOut.model_validate(row) for row in result.scalars().all()]
     total = (await db.execute(count_stmt)).scalar_one()
     return EmailListResponse(total=total, items=items)
+
+
+@router.post("/batch", response_model=dict)
+async def batch_action(
+    payload: BatchActionRequest, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Apply a bulk action (read/unread/archive/star/delete) to a set of mails."""
+    if payload.action not in BATCH_ACTIONS:
+        raise HTTPException(status_code=422, detail=f"Invalid action: {payload.action}")
+
+    if payload.action == "delete":
+        # Physical delete keeps the mailbox clean.
+        stmt = select(UnifiedEmail).where(UnifiedEmail.id.in_(payload.ids))
+        rows = (await db.execute(stmt)).scalars().all()
+        for row in rows:
+            await db.delete(row)
+        await db.commit()
+        return {"updated": len(rows)}
+
+    # Field-to-value map for the other actions.
+    field_value = {
+        "read": (UnifiedEmail.is_read, True),
+        "unread": (UnifiedEmail.is_read, False),
+        "archive": (UnifiedEmail.is_archived, True),
+        "unarchive": (UnifiedEmail.is_archived, False),
+        "star": (UnifiedEmail.is_starred, True),
+        "unstar": (UnifiedEmail.is_starred, False),
+    }
+    col, value = field_value[payload.action]
+    stmt = update(UnifiedEmail).where(UnifiedEmail.id.in_(payload.ids)).values({col: value})
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"updated": result.rowcount or 0}
 
 
 @router.get("/{email_id}", response_model=EmailOut)

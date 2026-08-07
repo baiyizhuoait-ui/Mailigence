@@ -6,20 +6,36 @@ Run (dev):
 from __future__ import annotations
 
 import asyncio
+import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from app.api import accounts, ads, dashboard, emails, idle, import_jobs, oauth, replies, reports
+from app.api import (
+    accounts,
+    ads,
+    categories,
+    dashboard,
+    emails,
+    idle,
+    import_jobs,
+    oauth,
+    replies,
+    reports,
+)
 from app.api.settings import router as settings_router
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models.email_account import EmailAccount
 from app.services import mail_sync, reconcile_orphans
 from app.services.idle_manager import manager as idle_manager
+
+_log = logging.getLogger(__name__)
 
 # Background sync interval for servers that don't support IMAP IDLE.
 BACKGROUND_SYNC_SECONDS = 120
@@ -98,9 +114,31 @@ async def health() -> dict:
     }
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Return a readable error body instead of a bare 500, and log the traceback.
+
+    Without this handler, FastAPI returns ``Internal Server Error`` with no
+    detail, so the frontend can't surface why a request failed.
+    """
+    tb = traceback.format_exc()
+    _log.error(
+        "Unhandled error on %s %s: %s\n%s",
+        request.method,
+        request.url.path,
+        exc,
+        tb,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {exc}"},
+    )
+
+
 app.include_router(accounts.router)
 app.include_router(oauth.router)
 app.include_router(emails.router)
+app.include_router(categories.router)
 app.include_router(import_jobs.router)
 app.include_router(dashboard.router)
 app.include_router(ads.router)

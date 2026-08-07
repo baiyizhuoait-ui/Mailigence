@@ -64,6 +64,8 @@ class EmailOut(BaseModel):
     received_at: Optional[datetime] = None
     is_read: bool
     has_reply: bool
+    is_archived: bool = False
+    is_starred: bool = False
     # AI fields (null until Stage 3)
     category: Optional[str] = None
     is_advertisement: Optional[bool] = None

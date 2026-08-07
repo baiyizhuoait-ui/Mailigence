@@ -1,0 +1,35 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ---- Node / Frontend ----
+node_modules/
+dist/
+*.tsbuildinfo
+
+# ---- Environment & secrets (NEVER commit real credentials) ----
+.env
+.env.local
+.env.*.local
+
+# ---- Database / runtime ----
+*.db
+*.sqlite3
+data/
+logs/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Misc ----
+*.log

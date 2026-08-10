@@ -17,7 +17,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select, update
@@ -37,7 +37,7 @@ def invalidate_cache() -> None:
     """Drop all cached schedule results (called when AI settings change)."""
     _cache.clear()
 
-_SCHEDULE_PROMPT = """你是一名邮件优先级分析助手。以下是用户待处理的邮件列表（JSON数组），每封邮件包含 id, priority, action, subject, summary, received_at 字段。
+_SCHEDULE_PROMPT = """你是一名邮件优先级分析助手。以下是用户的邮件列表（JSON数组），每封邮件包含 id, priority, action, subject, summary, body, received_at 字段。body 是邮件正文预览，请优先从 body 和 subject 中识别日程信息。
 今天是 {today}。请分析这些邮件并返回处理建议。
 
 只返回一个JSON对象（不要任何额外文字、不要markdown代码块），格式如下：
@@ -52,12 +52,12 @@ _SCHEDULE_PROMPT = """你是一名邮件优先级分析助手。以下是用户�
 }}
 
 分析要点：
-- 识别邮件中提到的会议、截止日期、预约等时间敏感事项
-- 提取日期和时间信息，如"明天下午3点"、"1月15日截止"、"下周一开会"等
+- 从正文和主题中识别会议、截止日期、预约、提醒等时间敏感事项——包括会议邀请、日历通知、截止提醒这类"仅需知晓"的邮件
+- 提取日期和时间信息，如"明天下午3点"、"1月15日截止"、"下周一开会"、"周五 15:00"等，并换算成实际日期写入 date 字段
 - 根据 {today} 计算实际日期，将 schedule_items 的 group 设为 today/tomorrow/this_week/upcoming
 - 按紧急程度排序优先级队列：今天到期的 > 明天到期的 > 本周的 > 无明确期限的
 - 需要回复的邮件优先级高于仅需查看的
-- 如果邮件内容没有明确时间信息，不要臆造日期
+- 如果邮件内容没有明确时间信息，不要臆造日期，也不要放入 schedule_items
 - priority_queue 的顺序就是建议的处理顺序
 - daily_brief 用中文，简洁有力"""
 
@@ -144,6 +144,38 @@ async def get_pending_emails(
     return list(result.scalars().all())
 
 
+async def get_schedule_candidates(
+    db: AsyncSession, limit: int = 30
+) -> list[UnifiedEmail]:
+    """Fetch emails likely to contain schedule info (meetings/deadlines).
+
+    Unlike ``get_pending_emails`` (reply/review only), this scans the last 14
+    days of non-ad, non-archived, unhandled inbox mail regardless of the
+    suggested action — meeting invites and calendar notifications are usually
+    classified as 'notice', not 'reply', and would otherwise never reach the
+    schedule extractor.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=14)
+    stmt = (
+        select(UnifiedEmail)
+        .where(
+            UnifiedEmail.direction == MailDirection.INBOX,
+            UnifiedEmail.handled_at.is_(None),
+            UnifiedEmail.is_archived.is_(False),
+            UnifiedEmail.received_at >= since,
+            UnifiedEmail.is_advertisement.is_(False)
+            | (UnifiedEmail.is_advertisement.is_(None)),
+        )
+        .order_by(
+            UnifiedEmail.priority_score.desc().nullslast(),
+            UnifiedEmail.received_at.desc().nullslast(),
+        )
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def mark_handled(db: AsyncSession, email_id: int) -> bool:
     """Mark a single email as handled on the dashboard."""
     now = datetime.now(timezone.utc)
@@ -173,7 +205,7 @@ async def analyze_schedule(
         data, _ = cached
         return ScheduleResult(**data)
 
-    emails = await get_pending_emails(db, limit=30)
+    emails = await get_schedule_candidates(db, limit=30)
     if not emails:
         result = ScheduleResult(
             daily_brief="暂无待处理邮件，一切就绪。",
@@ -226,7 +258,11 @@ async def _analyze_with_llm(
             "priority": e.priority_score or 0,
             "action": e.suggested_action or "review",
             "subject": (e.subject or "(no subject)")[:120],
-            "summary": (e.summary or e.body_snippet or "")[:200],
+            "summary": (e.summary or "")[:150],
+            # The full body lives in the mailbox; the persisted snippet is the
+            # best local proxy for schedule extraction (dates/times usually
+            # live in the body, not in the AI summary).
+            "body": (e.body_snippet or "")[:300],
             "received_at": e.received_at.isoformat() if e.received_at else "",
         })
     user_content = json.dumps(mail_list, ensure_ascii=False)
@@ -296,6 +332,116 @@ async def _anthropic_schedule(
     return json.loads(content)
 
 
+# --- rule-based schedule extraction -----------------------------------------
+
+_SCHEDULE_KEYWORDS = (
+    "会议", "meeting", "日程", "邀请", "invite", "deadline", "截止",
+    "appointment", "预约", "reminder", "提醒", "agenda", "calendar",
+    "日历", "明天", "today", "今天", "tomorrow", "下周", "星期", "周",
+    "due", "due on", "报到", "签到",
+)
+
+
+def _group_for_date(dt: date, today: date) -> str:
+    if dt == today:
+        return "today"
+    if dt == today + timedelta(days=1):
+        return "tomorrow"
+    if dt <= today + timedelta(days=7):
+        return "this_week"
+    return "upcoming"
+
+
+def _parse_schedule_date(text: str) -> tuple[str, str] | None:
+    """Return ``(group, date_iso)`` for common date phrases, or ``None``.
+
+    Handles 今天/明天/后天, "X月X日", 周X/下周X/星期X, and English today/
+    tomorrow. Relative phrases (明天 etc.) are resolved against today.
+    """
+    import re
+
+    today = date.today()
+    t = text.lower()
+    if re.search(r"今天|今日|today", t):
+        return "today", today.isoformat()
+    if re.search(r"明天|明日|tomorrow", t):
+        return "tomorrow", (today + timedelta(days=1)).isoformat()
+    if re.search(r"后天", t):
+        return _group_for_date(today + timedelta(days=2), today), (today + timedelta(days=2)).isoformat()
+
+    m = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", text)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        for year in (today.year, today.year + 1):
+            try:
+                dt = date(year, month, day)
+            except ValueError:
+                continue
+            if dt >= today:
+                return _group_for_date(dt, today), dt.isoformat()
+
+    m = re.search(r"((?:下)?周|(?:下)?星期)([一二三四五六日天])", text)
+    if m:
+        wd = "一二三四五六日天".index(m.group(2))
+        days = (wd - today.weekday()) % 7
+        if m.group(1).startswith("下"):
+            days += 7
+        if days == 0:
+            days = 7  # "周X" == today's weekday -> next occurrence
+        dt = today + timedelta(days=days)
+        return _group_for_date(dt, today), dt.isoformat()
+    return None
+
+
+def _parse_schedule_time(text: str) -> str:
+    """Extract a ``HH:MM`` time from common expressions, or empty string."""
+    import re
+
+    m = re.search(r"(\d{1,2})[:：](\d{2})", text)
+    if m:
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
+    m = re.search(r"(?:上午|下午|晚上|中午|早上)?(\d{1,2})\s*点(?:\s*(半|(\d{1,2})分))?", text)
+    if m:
+        h = int(m.group(1))
+        if re.search(r"下午|晚上", text) and h < 12:
+            h += 12
+        if m.group(2) == "半":
+            return f"{h:02d}:30"
+        if m.group(3):
+            return f"{h:02d}:{int(m.group(3)):02d}"
+        return f"{h:02d}:00"
+    return ""
+
+
+def _extract_schedule_item(e: UnifiedEmail) -> dict | None:
+    """Rule-based schedule detection for a single email, or ``None``."""
+    text = f"{e.subject or ''} {e.summary or ''} {e.body_snippet or ''}"
+    if not any(kw in text.lower() for kw in _SCHEDULE_KEYWORDS):
+        return None
+
+    lower = text.lower()
+    if any(k in lower for k in ("meeting", "会议", "agenda", "日程")):
+        stype = "meeting"
+    elif any(k in lower for k in ("deadline", "截止", "due")):
+        stype = "deadline"
+    elif any(k in lower for k in ("预约", "appointment")):
+        stype = "appointment"
+    else:
+        stype = "reminder"
+
+    parsed = _parse_schedule_date(text)
+    group = parsed[0] if parsed else "upcoming"
+    date_str = parsed[1] if parsed else ""
+    return {
+        "title": (e.subject or "(no subject)")[:80],
+        "date": date_str,
+        "time": _parse_schedule_time(text),
+        "email_id": e.id,
+        "type": stype,
+        "group": group,
+    }
+
+
 def _analyze_with_rules(emails: list[UnifiedEmail]) -> ScheduleResult:
     """Rule-based fallback: sort by priority + action urgency + recency."""
     from datetime import date, timedelta
@@ -327,35 +473,12 @@ def _analyze_with_rules(emails: list[UnifiedEmail]) -> ScheduleResult:
             "estimated_minutes": 3 if action == "reply" else 2,
         })
 
-    # Detect schedule items via keyword matching.
-    schedule_keywords = (
-        "会议", "meeting", "日程", "邀请", "deadline", "截止",
-        "appointment", "预约", "reminder", "提醒", "agenda",
-        "明天", "today", "今天", "tomorrow", "下周",
-    )
+    # Detect schedule items from subject + summary + body snippet.
     items: list[dict] = []
     for e in emails:
-        text = f"{e.subject or ''} {e.summary or ''}".lower()
-        if any(kw in text for kw in schedule_keywords):
-            stype = "meeting" if any(k in text for k in ("会议", "meeting", "agenda")) else "reminder"
-
-            # Try to determine the date group.
-            group = "upcoming"
-            if any(k in text for k in ("今天", "today")):
-                group = "today"
-            elif any(k in text for k in ("明天", "tomorrow")):
-                group = "tomorrow"
-            elif "下周" in text or "next week" in text:
-                group = "this_week"
-
-            items.append({
-                "title": (e.subject or "(no subject)")[:80],
-                "date": "",
-                "time": "",
-                "email_id": e.id,
-                "type": stype,
-                "group": group,
-            })
+        item = _extract_schedule_item(e)
+        if item:
+            items.append(item)
 
     urgent = sum(1 for q in queue if q["urgency"] == "high")
     total = len(queue)

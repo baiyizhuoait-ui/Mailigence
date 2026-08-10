@@ -196,6 +196,33 @@ def _decode_bytes(payload: bytes, charset: str | None) -> str:
     return payload.decode("gbk", errors="replace")
 
 
+def _extract_full_body(msg: Message) -> dict[str, str]:
+    """Return ``{"html": ..., "text": ...}`` for a parsed message.
+
+    Prefers the ``text/html`` part (for rich rendering) and the ``text/plain``
+    part (for a readable fallback). If only one alternative exists, the other
+    is derived from it so the frontend always has something to show.
+    """
+    html_parts: list[str] = []
+    text_parts: list[str] = []
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        decoded = _decode_bytes(payload, part.get_content_charset())
+        if ctype == "text/html":
+            html_parts.append(decoded)
+        elif ctype == "text/plain":
+            text_parts.append(decoded)
+
+    html = "\n".join(html_parts).strip()
+    text = "\n".join(text_parts).strip()
+    if not text and html:
+        text = _html_to_text(html)
+    return {"html": html, "text": text}
+
+
 def _first_text_body(msg: Message, limit: int = SNIPPET_MAX * 4) -> str:
     """Best-effort extraction of a plain-text preview from a parsed message."""
     candidate = ""
@@ -462,6 +489,47 @@ class ImapClient:
                 raise RuntimeError(f"FETCH failed: {data!r}")
             results.extend(self._parse_fetch_response(data, direction))
         return results
+
+    def fetch_full_body(self, message_id: str, *, sent: bool = False) -> dict[str, str]:
+        """Fetch the full body of a single message by Message-ID.
+
+        Returns ``{"html": ..., "text": ...}`` (either may be empty). Uses
+        ``BODY.PEEK[]`` so the fetch never marks the message as read. When
+        ``sent`` is true the Sent folder is tried first, falling back to
+        INBOX.
+        """
+        assert self._conn is not None
+        if sent:
+            try:
+                self.select_sent_folder()
+            except Exception:
+                self.select_folder("INBOX")
+        else:
+            self.select_folder("INBOX")
+
+        # UID SEARCH HEADER MESSAGE-ID "<id>". The <...> form matches the
+        # RFC822 Message-ID header exactly; < > are not IMAP atom-special
+        # chars so this is a legal unquoted search string on all servers.
+        mid = message_id.strip().strip("<>")
+        typ, data = self._conn.uid("SEARCH", "HEADER", "MESSAGE-ID", f"<{mid}>")
+        if typ != "OK":
+            raise RuntimeError(f"SEARCH failed: {data!r}")
+        uids = data[0].split() if data and data[0] else []
+        if not uids:
+            return {"html": "", "text": ""}
+
+        typ, data = self._conn.uid("FETCH", uids[-1].decode(), "(BODY.PEEK[])")
+        if typ != "OK":
+            raise RuntimeError(f"FETCH failed: {data!r}")
+        for item in data:
+            if not isinstance(item, tuple) or len(item) != 2:
+                continue
+            raw = item[1]
+            if not isinstance(raw, (bytes, bytearray)):
+                continue
+            msg = email.message_from_bytes(bytes(raw), policy=email_policy.compat32)
+            return _extract_full_body(msg)
+        return {"html": "", "text": ""}
 
     def fetch_flags(self, uids: Iterable[str]) -> dict[str, bool]:
         """Fetch only the FLAGS for a set of UIDs — no message body.

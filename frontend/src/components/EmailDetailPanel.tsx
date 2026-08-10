@@ -39,6 +39,9 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [categories, setCategories] = useState<EmailCategory[]>([]);
+  const [fullBody, setFullBody] = useState<{ html: string; text: string } | null>(null);
+  const [loadingFull, setLoadingFull] = useState(false);
+  const [fullError, setFullError] = useState<string | null>(null);
 
   const catLabel = (name: string) =>
     categories.find((c) => c.name === name)?.label ?? name;
@@ -92,6 +95,21 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     }
   }
 
+  async function handleViewFull() {
+    if (!email) return;
+    setLoadingFull(true);
+    setFullError(null);
+    try {
+      const body = await api.getEmailFullBody(email.id);
+      setFullBody(body);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFullError(msg.replace(/^4\d\d:\s*/, ""));
+    } finally {
+      setLoadingFull(false);
+    }
+  }
+
   useEffect(() => {
     if (emailId === null) {
       setEmail(null);
@@ -99,6 +117,8 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     }
     let cancelled = false;
     setLoading(true);
+    setFullBody(null);
+    setFullError(null);
     api
       .getEmail(emailId)
       .then((data) => {
@@ -170,8 +190,37 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
               </div>
 
               <div className="detail-body">
-                <p className="detail-section-title">{t("detail.bodyPreview")}</p>
-                <p className="detail-snippet">{email.body_snippet || t("misc.noSnippet")}</p>
+                <div className="detail-body-head">
+                  <p className="detail-section-title">{t("detail.bodyPreview")}</p>
+                  {!fullBody && (
+                    <button
+                      className="btn small ghost"
+                      onClick={handleViewFull}
+                      disabled={loadingFull}
+                    >
+                      {loadingFull ? t("detail.fullLoading") : t("detail.viewFull")}
+                    </button>
+                  )}
+                </div>
+                {fullBody ? (
+                  fullBody.html ? (
+                    <iframe
+                      className="full-body-frame"
+                      sandbox=""
+                      srcDoc={fullBody.html}
+                      title={t("detail.viewFull")}
+                    />
+                  ) : (
+                    <pre className="full-body-text">{fullBody.text}</pre>
+                  )
+                ) : (
+                  <>
+                    <p className="detail-snippet">{email.body_snippet || t("misc.noSnippet")}</p>
+                    {fullError && (
+                      <p className="detail-full-error">{t("detail.fullError")}{fullError}</p>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="detail-ai">

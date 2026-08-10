@@ -18,7 +18,7 @@ from typing import AsyncIterator
 import httpx
 
 from app.models.email import MailDirection
-from app.services.imap_client import NormalisedMail, SNIPPET_MAX
+from app.services.imap_client import NormalisedMail, SNIPPET_MAX, _html_to_text
 
 GRAPH_ENDPOINT = "https://graph.microsoft.com/v1.0"
 
@@ -121,6 +121,37 @@ async def list_messages(
 async def fetch_user_profile(access_token: str) -> dict:
     """Return the signed-in user's profile (used for connection tests)."""
     return await _graph_get(access_token, f"{GRAPH_ENDPOINT}/me")
+
+
+async def fetch_message_body(
+    access_token: str, message_id: str, *, sent: bool = False
+) -> dict[str, str]:
+    """Fetch one message's full body by its InternetMessageId.
+
+    Returns ``{"html": ..., "text": ...}``. Graph filters on
+    ``internetMessageId`` with an ``eq`` expression; we try both the
+    ``<...>`` and bare forms because providers store it inconsistently.
+    """
+    from urllib.parse import quote
+
+    mid = message_id.strip().strip("<>")
+    folder = "/me/mailFolders/sentitems/messages" if sent else "/me/messages"
+    for value in (f"<{mid}>", mid):
+        url = (
+            f"{GRAPH_ENDPOINT}{folder}?$top=1"
+            f"&$filter=internetMessageId eq '{quote(value)}'"
+            "&$select=id,body"
+        )
+        data = await _graph_get(access_token, url)
+        items = data.get("value") or []
+        if not items:
+            continue
+        body = items[0].get("body") or {}
+        content = body.get("content") or ""
+        if (body.get("contentType") or "").lower() == "html":
+            return {"html": content, "text": _html_to_text(content)}
+        return {"html": "", "text": content}
+    raise RuntimeError("Message not found in mailbox")
 
 
 # --- normalisation -----------------------------------------------------------

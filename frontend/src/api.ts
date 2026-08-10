@@ -126,6 +126,9 @@ export const api = {
 
   getEmail: (id: number) => request<UnifiedEmail>(`/emails/${id}`),
 
+  getEmailFullBody: (id: number) =>
+    request<{ html: string; text: string }>(`/emails/${id}/full`),
+
   batchEmailAction: (ids: number[], action: string) =>
     request<{ updated: number }>("/emails/batch", {
       method: "POST",

@@ -999,6 +999,46 @@ button {
   margin-bottom: 16px;
 }
 
+.detail-body-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detail-body-head .detail-section-title {
+  margin-bottom: 10px;
+}
+
+.full-body-frame {
+  width: 100%;
+  min-height: 320px;
+  max-height: 480px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+  background: #fff;
+}
+
+.full-body-text {
+  max-height: 480px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  background: var(--hover, rgba(0, 0, 0, 0.02));
+  border-radius: 8px;
+}
+
+.detail-full-error {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--danger, #dc2626);
+}
+
 .detail-snippet {
   font-size: 13.5px;
   line-height: 1.6;

@@ -98,3 +98,10 @@ class EmailOut(BaseModel):
 class EmailListResponse(BaseModel):
     total: int
     items: list[EmailOut]
+
+
+class FullBodyOut(BaseModel):
+    """Full message body fetched on demand from the source mailbox."""
+
+    html: str = ""
+    text: str = ""

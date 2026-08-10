@@ -1,14 +1,17 @@
 """Unified mailbox view — lists mails across all accounts, protocol-agnostic."""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.email import UnifiedEmail
-from app.schemas.email import EmailListResponse, EmailOut
+from app.models.email import MailDirection, UnifiedEmail
+from app.models.email_account import AuthType, EmailAccount
+from app.schemas.email import EmailListResponse, EmailOut, FullBodyOut
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
@@ -121,6 +124,55 @@ async def get_email(email_id: int, db: AsyncSession = Depends(get_db)) -> Unifie
     if email is None:
         raise HTTPException(status_code=404, detail="Email not found")
     return email
+
+
+@router.get("/{email_id}/full", response_model=FullBodyOut)
+async def get_email_full_body(
+    email_id: int, db: AsyncSession = Depends(get_db)
+) -> FullBodyOut:
+    """Fetch the full message body on demand from the source mailbox.
+
+    Only a snippet is persisted; this endpoint goes back to the provider
+    (IMAP or Microsoft Graph) and returns the complete body so the user can
+    read the mail without leaving the app.
+    """
+    email = await db.get(UnifiedEmail, email_id)
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    account = await db.get(EmailAccount, email.account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    from app.services import mail_sync, ms_graph
+    from app.services.imap_client import open_connection
+
+    sent = email.direction == MailDirection.SENT
+    try:
+        if account.auth_type == AuthType.OAUTH_MICROSOFT:
+            credential = await mail_sync.resolve_credential(account)
+            body = await ms_graph.fetch_message_body(
+                credential, email.message_id, sent=sent
+            )
+        else:
+            credential = await mail_sync.resolve_credential(account)
+            client = await open_connection(account, credential)
+            try:
+                body = await asyncio.to_thread(
+                    client.fetch_full_body, email.message_id, sent=sent
+                )
+            finally:
+                await asyncio.to_thread(client.logout)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not fetch the full message: {exc}",
+        ) from exc
+
+    if not body.get("html") and not body.get("text"):
+        raise HTTPException(
+            status_code=404, detail="Message body was not found on the server"
+        )
+    return FullBodyOut(html=body.get("html", ""), text=body.get("text", ""))
 
 
 @router.patch("/{email_id}/read", response_model=EmailOut)

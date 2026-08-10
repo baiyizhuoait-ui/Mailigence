@@ -1,13 +1,18 @@
-"""Analysis orchestration: run AI analysis over unanalyzed emails.
+"""Analysis orchestration: run AI analysis over emails that need it.
 
-* ``run_analysis`` processes emails where ``analyzed_at IS NULL``, calling the
-  AI analyzer once per email and persisting the structured result.
+* ``run_analysis`` processes emails where ``analyzed_at IS NULL`` **or**
+  ``category IS NULL``, calling the AI analyzer once per email and persisting
+  the structured result. The second clause means mails left uncategorized by a
+  category delete are automatically re-classified.
 * Dedup cache: if a *previously analyzed* email from the same sender with the
   same subject exists, its analysis is reused — so bulk marketing mail with
   identical subjects doesn't re-invoke the LLM (cost control per spec).
+  Cache is only applied to never-analyzed mail; re-queued (previously analyzed)
+  mail always gets a fresh classification.
 * ``AnalysisManager`` runs the batch as an asyncio background task with an
   in-memory status dict the frontend can poll. Triggered automatically when an
-  import completes, and manually via the analysis API.
+  import completes, on category delete, by the periodic sweep in main.py, and
+  manually via the analysis API.
 """
 from __future__ import annotations
 
@@ -37,8 +42,18 @@ async def run_analysis(
     limit: int = ANALYSIS_BATCH,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[int, int]:
-    """Analyze up to ``limit`` unanalyzed emails. Returns (analyzed, total)."""
-    stmt = select(UnifiedEmail).where(UnifiedEmail.analyzed_at.is_(None))
+    """Analyze up to ``limit`` emails that need it. Returns (analyzed, total).
+
+    Two queues are covered:
+    * never-analyzed mails (``analyzed_at IS NULL``) — new imports / syncs;
+    * uncategorized mails (``category IS NULL``) — e.g. after the user deletes
+      a category, those mails re-enter this queue automatically and the AI
+      assigns them a fresh classification.
+    """
+    stmt = select(UnifiedEmail).where(
+        (UnifiedEmail.analyzed_at.is_(None))
+        | (UnifiedEmail.category.is_(None))
+    )
     if account_id is not None:
         stmt = stmt.where(UnifiedEmail.account_id == account_id)
     stmt = stmt.order_by(
@@ -56,7 +71,11 @@ async def run_analysis(
     category_names = await list_category_names(db)
 
     for email in emails:
-        cached = await _find_cached(db, email)
+        # Dedup cache only applies to never-analyzed mail (cost control for
+        # bulk marketing with identical subjects). Re-queued mails — ones that
+        # were analyzed before but lost their category to a category delete —
+        # must get a fresh LLM classification instead of copying the stale one.
+        cached = await _find_cached(db, email) if email.analyzed_at is None else None
         if cached is not None:
             result = AnalysisResult(
                 category=cached.category or "other",
@@ -141,9 +160,13 @@ async def _find_cached(db: AsyncSession, email: UnifiedEmail) -> UnifiedEmail | 
 
 
 async def pending_count(db: AsyncSession, account_id: Optional[int] = None) -> int:
+    """Count emails waiting for analysis (unanalyzed or uncategorized)."""
     from sqlalchemy import func as _func
 
-    stmt = select(_func.count(UnifiedEmail.id)).where(UnifiedEmail.analyzed_at.is_(None))
+    stmt = select(_func.count(UnifiedEmail.id)).where(
+        (UnifiedEmail.analyzed_at.is_(None))
+        | (UnifiedEmail.category.is_(None))
+    )
     if account_id is not None:
         stmt = stmt.where(UnifiedEmail.account_id == account_id)
     return (await db.execute(stmt)).scalar_one()
@@ -164,6 +187,12 @@ class AnalysisManager:
         task = self._tasks.get(key)
         if task is not None and not task.done():
             return False  # already running
+        # Serialize batch runs globally: the per-account (key>0) and all-account
+        # (key=0) scans select from the same pending queue, so only ever let one
+        # analysis task run at a time to avoid re-analyzing the same mails.
+        for other in self._tasks.values():
+            if not other.done():
+                return False
         self._status[key] = {"running": True, "total": 0, "analyzed": 0, "error": ""}
 
         def on_progress(analyzed: int, total: int) -> None:

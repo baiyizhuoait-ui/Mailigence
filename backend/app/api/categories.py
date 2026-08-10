@@ -121,7 +121,12 @@ async def update_category(
 async def delete_category(
     category_id: int, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """Delete a category; affected mails become uncategorized (NULL)."""
+    """Delete a category; affected mails become uncategorized (NULL).
+
+    The affected mails re-enter the analysis queue (their ``category`` is
+    NULL, which ``run_analysis`` now treats as "needs classification"), and a
+    background analysis run is kicked off so the AI re-classifies them.
+    """
     row = await db.get(EmailCategory, category_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -133,4 +138,13 @@ async def delete_category(
     )
     await db.delete(row)
     await db.commit()
+
+    # Kick off re-classification of the now-uncategorized mails in the
+    # background (best-effort; the periodic sweep covers it otherwise).
+    try:
+        from app.services.analysis_service import manager as analysis_mgr
+        analysis_mgr.start(None)
+    except Exception:
+        pass
+
     return {"deleted": category_id}

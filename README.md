@@ -36,11 +36,29 @@ Mailigence 是一个自托管的邮件聚合与 AI 分析工具。将 Gmail / Ou
 
 ## 🚀 快速开始
 
-### 环境要求
+### Windows 一键启动（推荐）
 
-- Python 3.11+
-- Node.js 18+
-- PostgreSQL 14+
+环境要求：**Python 3.11+**、**Node.js 18+**（安装时勾选加入 PATH）
+
+1. 双击项目根目录的 `start.bat`（或运行 `.\start.ps1`）
+2. 首次运行脚本会自动完成以下全部步骤：
+   - 检测 PostgreSQL —— 优先使用项目内置便携版 `\.pginstall\pgsql`，没有则用系统安装版
+   - 首次自动 `initdb` 初始化数据目录并启动数据库
+   - 自动创建 `mailigence` 角色与数据库（已有则跳过）
+   - 自动创建 Python 虚拟环境并安装后端依赖
+   - 自动生成 `backend\.env` 与加密密钥
+   - 自动安装前端依赖
+   - 启动后端(:8000) + 前端(:5173)，打开浏览器 → http://localhost:5173
+
+停止服务：双击 `stop.bat`（运行 `.\stop.ps1 -StopDb` 可连同数据库一起停止）。
+
+> **便携版 PostgreSQL 获取方式**：下载
+> `https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip`
+> 解压后把 `pgsql` 目录放到 `\.pginstall\pgsql` 即可，脚本会自动识别。
+
+### 手动启动（macOS / Linux / 高级用户）
+
+环境要求：Python 3.11+、Node.js 18+、PostgreSQL 14+
 
 ### 1. 数据库
 
@@ -126,6 +144,9 @@ AI_MODEL=deepseek-chat
 
 ```
 mailigence/
+├── start.bat / start.ps1      # Windows 一键启动（自动初始化数据库与依赖）
+├── stop.bat / stop.ps1        # 一键停止（stop.ps1 -StopDb 连数据库一起停）
+├── docker-compose.yml         # 可选：仅启动 PostgreSQL 容器
 ├── backend/
 │   ├── app/
 │   │   ├── api/          # FastAPI 路由（accounts/dashboard/settings/reports…）
@@ -159,6 +180,14 @@ mailigence/
 **Ollama 怎么用？** 安装 [Ollama](https://ollama.com/) → `ollama pull qwen2.5:7b` → 在设置页选择「Ollama 本地模型」即可。
 
 **端口冲突？** 后端默认 8000、前端 5173，可在 `.env` 的 `APP_PORT` 和 `vite.config.ts` 中修改。
+
+**一键启动脚本提示找不到 PostgreSQL？** 把便携版解压到 `\.pginstall\pgsql` 后重试，或安装 PostgreSQL 并加入 PATH。
+
+**数据库端口被占用/被防火墙拦截？** 可在 `backend\.env` 的 `DATABASE_URL` 中修改端口（如 `@127.0.0.1:5433/`），启动脚本会自动读取 .env 中的端口，无需额外配置。
+
+**如何迁移/备份数据？** 便携版数据目录在 `\.pginstall\pgdata`，直接复制该目录即可整体迁移；或用 `pg_dump` 导出。
+
+**macOS/Linux 怎么跑？** 手动方式见上方「手动启动」；也可以使用根目录的 `docker-compose.yml` 只启动数据库（`docker compose up -d postgres`）。
 
 ## 🔒 安全说明
 

@@ -28,13 +28,35 @@ Mailigence is a self-hosted email aggregation and AI analysis tool. Connect Gmai
 
 | Layer | Technology |
 |---|---|
-| Backend | Python 3.11+ · FastAPI · SQLAlchemy 2.0 (async) · asyncpg |
+| Backend | Python 3.11+ · FastAPI · SQLAlchemy 2.0 (async) · psycopg 3 |
 | Frontend | React 18 · TypeScript · Vite |
 | Database | PostgreSQL 14+ |
 | Email | IMAP (imaplib) · IMAP IDLE |
 | AI | OpenAI-compatible API / Anthropic / Ollama (swappable) |
 
 ## 🚀 Quick Start
+
+### Windows — one-click start (recommended)
+
+Requirements: **Python 3.11+** and **Node.js 18+** (add both to PATH during install).
+
+1. Double-click `start.bat` (or run `.\start.ps1`) in the project root.
+2. On first run the script automatically:
+   - Detects PostgreSQL (prefers the bundled portable build at `\.pginstall\pgsql`, falls back to a system install)
+   - Runs `initdb` and starts the database on first launch
+   - Creates the `mailigence` role and database if missing
+   - Creates a Python venv and installs backend dependencies
+   - Generates `backend\.env` with a fresh encryption key
+   - Installs frontend dependencies
+   - Starts the backend (:8000) + frontend (:5173) and opens the browser
+
+To stop: double-click `stop.bat` (run `.\stop.ps1 -StopDb` to also stop the database).
+
+> **Portable PostgreSQL**: download
+> `https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip`,
+> unzip it and place the `pgsql` folder at `\.pginstall\pgsql`.
+
+### Manual start (macOS / Linux / advanced)
 
 ### Requirements
 

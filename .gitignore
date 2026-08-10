@@ -23,6 +23,8 @@ dist/
 *.sqlite3
 data/
 logs/
+# Local PostgreSQL binaries/data (portable install) — never commit
+.pginstall/
 
 # ---- IDE / OS ----
 .idea/

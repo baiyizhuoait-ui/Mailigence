@@ -39,6 +39,31 @@ _log = logging.getLogger(__name__)
 
 # Background sync interval for servers that don't support IMAP IDLE.
 BACKGROUND_SYNC_SECONDS = 120
+# How often to sweep for emails still waiting on AI analysis (new imports that
+# exceeded one batch, or mails left uncategorized by a category delete).
+ANALYSIS_SWEEP_SECONDS = 60
+
+
+async def _analysis_sweep_loop() -> None:
+    """Periodically find emails that need AI analysis and run it.
+
+    ``run_analysis`` processes up to ANALYSIS_BATCH mails per run, so a large
+    import can leave a backlog; this loop keeps working the queue every minute
+    until it is empty. It also covers mails whose category was deleted (their
+    ``category`` is NULL, which the analysis query treats as pending).
+    """
+    await asyncio.sleep(15)  # let startup settle
+    while True:
+        try:
+            async with SessionLocal() as db:
+                from app.services.analysis_service import pending_count
+                pending = await pending_count(db)
+            if pending > 0:
+                from app.services.analysis_service import manager as analysis_mgr
+                analysis_mgr.start(None)
+        except Exception as exc:
+            _log.error("Analysis sweep error: %s", exc)
+        await asyncio.sleep(ANALYSIS_SWEEP_SECONDS)
 
 
 async def _background_sync_loop() -> None:
@@ -60,17 +85,32 @@ async def _background_sync_loop() -> None:
                         if count > 0:
                             from app.services.analysis_service import manager as analysis_mgr
                             analysis_mgr.start(acct.id)
-                    except Exception:
-                        pass  # best-effort, don't crash the loop
-        except Exception:
-            pass
+                    except Exception as exc:
+                        # Don't crash the loop, but surface the failure in the
+                        # logs instead of silently swallowing it.
+                        _log.warning(
+                            "Background sync failed for account %s: %s",
+                            acct.email, exc,
+                        )
+        except Exception as exc:
+            _log.error("Background sync loop error: %s", exc)
         await asyncio.sleep(BACKGROUND_SYNC_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create tables on first start (Stage 1 convenience; use Alembic later).
-    await init_db()
+    try:
+        await init_db()
+    except Exception as exc:
+        _log.error(
+            "Database connection failed: %s\n"
+            "Please make sure PostgreSQL is running and that DATABASE_URL in "
+            "backend/.env is correct (see backend/.env.example).",
+            exc,
+        )
+        # Fail fast with a clear message instead of an opaque traceback.
+        raise SystemExit(1) from exc
     # Mark any import jobs orphaned by a crash/restart as failed so the UI
     # never shows a permanently "running" job.
     async with SessionLocal() as db:
@@ -82,10 +122,14 @@ async def lifespan(app: FastAPI):
             await idle_manager.start(acct.id)
     # Start background sync as a fallback for servers without IDLE support.
     sync_task = asyncio.create_task(_background_sync_loop())
+    # Start the analysis sweep so unanalyzed/uncategorized mail is always
+    # picked up automatically.
+    analysis_task = asyncio.create_task(_analysis_sweep_loop())
     yield
     # Stop all IDLE listeners on shutdown.
     idle_manager.stop_all()
     sync_task.cancel()
+    analysis_task.cancel()
 
 
 app = FastAPI(

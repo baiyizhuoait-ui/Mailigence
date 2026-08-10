@@ -78,7 +78,16 @@ if (-not $listening) {
             Write-Host "[3/6] First run: initializing data directory..."
             $initdb = Join-Path $PgBin 'initdb.exe'
             if (-not (Test-Path $initdb)) { throw "initdb.exe not found in $PgBin" }
-            & $initdb -D $PgData -U postgres -A trust -E UTF8 2>&1 | Out-Null
+            # Use scram auth + the same postgres password the script connects
+            # with below, so the auth setup and PGPASSWORD stay consistent
+            # (and no misleading trust mode that ignores passwords).
+            $pwFile = Join-Path $PgInstall 'pgpw.txt'
+            Set-Content -Path $pwFile -Value 'postgres_dev_pw' -NoNewline
+            try {
+                & $initdb -D $PgData -U postgres -A scram-sha-256 --pwfile=$pwFile -E UTF8 2>&1 | Out-Null
+            } finally {
+                Remove-Item $pwFile -Force -ErrorAction SilentlyContinue
+            }
             if (-not (Test-Path $PgData)) { throw "initdb failed" }
         }
         Write-Host "[3/6] Starting PostgreSQL on port $Port ..."

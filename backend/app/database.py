@@ -31,7 +31,9 @@ engine = create_async_engine(
     # PostgreSQL builds on Windows. A local tool doesn't need TLS on the
     # loopback link, so disable it explicitly (sslmode in the URL is NOT
     # forwarded to psycopg by SQLAlchemy's dialect — it must go here).
-    connect_args={"sslmode": "disable"},
+    # gssencmode=disable suppresses the parallel GSSENCRequest probe for the
+    # same reason (psycopg's default "prefer" still sends it).
+    connect_args={"sslmode": "disable", "gssencmode": "disable"},
 )
 
 SessionLocal = async_sessionmaker(

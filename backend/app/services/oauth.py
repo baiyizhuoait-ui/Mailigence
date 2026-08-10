@@ -109,8 +109,8 @@ OAUTH_PRESETS = {
     "microsoft": {
         "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
         "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-        # IMAP via XOAUTH2 for personal Outlook accounts
-        "scope": "https://outlook.office.com/IMAP.AccessAsUser.All offline_access openid email",
+        # Read mail via the Microsoft Graph REST API (no IMAP XOAUTH2 needed).
+        "scope": "User.Read Mail.Read offline_access openid profile email",
         "client_id": settings.microsoft_oauth_client_id,
         "client_secret": settings.microsoft_oauth_client_secret,
         "redirect_path": "/api/oauth/callback/microsoft",

@@ -24,10 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
 from app.models.email import UnifiedEmail
-from app.models.email_account import EmailAccount, SyncStatus
+from app.models.email_account import AuthType, EmailAccount, SyncStatus
 from app.models.import_job import ImportJob, ImportStatus
-from app.services.imap_client import open_connection
-from app.services.mail_sync import apply_read_flags, resolve_credential, upsert_mails
+from app.services.mail_sync import resolve_credential
 
 # UIDs fetched + upserted per progress tick. Smaller = finer progress granularity.
 PROGRESS_BATCH = 50
@@ -67,78 +66,14 @@ class ImportJobManager:
 
             try:
                 credential = await resolve_credential(account)
-                client = await open_connection(account, credential)
-                try:
-                    await asyncio.to_thread(client.select_folder, "INBOX")
-                    uids = await asyncio.to_thread(client.search_since, since)
-                    job.total = len(uids)
-                    await db.commit()
-
-                    # --- Skip already-imported messages ---
-                    # Fetch only Message-ID headers (very fast, ~100 bytes/msg)
-                    # and filter out UIDs whose Message-ID already exists in DB.
-                    # This avoids downloading full RFC822 for duplicates.
-                    if uids:
-                        uid_to_mid = await asyncio.to_thread(
-                            client.fetch_message_ids, uids
-                        )
-                        existing_mids = await _existing_message_ids(
-                            db, account_id
-                        )
-                        existing_uids = [
-                            u
-                            for u in uids
-                            if uid_to_mid.get(u, f"synthetic:{u}")
-                            in existing_mids
-                        ]
-                        new_uids = [
-                            u
-                            for u in uids
-                            if uid_to_mid.get(u, f"synthetic:{u}")
-                            not in existing_mids
-                        ]
-                        skipped = len(uids) - len(new_uids)
-                        if skipped:
-                            job.total = len(new_uids)
-                            await db.commit()
-                        # Existing rows were deduped out of the full fetch —
-                        # reconcile their read state from live FLAGS so a
-                        # re-import corrects stale is_read values.
-                        if existing_uids:
-                            flags = await asyncio.to_thread(
-                                client.fetch_flags, existing_uids
-                            )
-                            await apply_read_flags(
-                                db, account_id, uid_to_mid, flags
-                            )
-                        uids = new_uids
-
-                    processed = 0
-                    for i in range(0, len(uids), PROGRESS_BATCH):
-                        if job_id in self._cancel_flags:
-                            self._cancel_flags.discard(job_id)
-                            job.status = ImportStatus.CANCELLED
-                            job.finished_at = datetime.now(timezone.utc)
-                            account.sync_status = SyncStatus.IDLE
-                            await db.commit()
-                            return
-
-                        batch = uids[i : i + PROGRESS_BATCH]
-                        mails = await asyncio.to_thread(client.fetch_normalised, batch)
-                        await upsert_mails(db, account, mails)
-                        processed += len(batch)
-                        job.processed = processed
-                        await db.commit()
-                finally:
-                    await asyncio.to_thread(client.logout)
-
-                job.status = ImportStatus.COMPLETED
-                job.finished_at = datetime.now(timezone.utc)
-                account.last_synced_at = datetime.now(timezone.utc)
-                account.sync_status = SyncStatus.IDLE
-                account.last_error = ""
-                await db.commit()
-
+                if account.auth_type == AuthType.OAUTH_MICROSOFT:
+                    cancelled = await self._run_graph_import(
+                        db, job, account, credential, since
+                    )
+                else:
+                    cancelled = await self._run_imap_import(
+                        db, job, account, credential, since
+                    )
             except Exception as exc:
                 job.status = ImportStatus.FAILED
                 job.error = str(exc)[:500]
@@ -148,6 +83,19 @@ class ImportJobManager:
                 await db.commit()
                 return
 
+            if cancelled:
+                # Status was already set to CANCELLED inside the import method.
+                account.sync_status = SyncStatus.IDLE
+                await db.commit()
+                return
+
+            job.status = ImportStatus.COMPLETED
+            job.finished_at = datetime.now(timezone.utc)
+            account.last_synced_at = datetime.now(timezone.utc)
+            account.sync_status = SyncStatus.IDLE
+            account.last_error = ""
+            await db.commit()
+
             # Kick off AI analysis for the freshly imported mail. Runs in the
             # background; failures here must not affect the completed import.
             try:
@@ -156,6 +104,110 @@ class ImportJobManager:
                 analysis_manager.start(account_id)
             except Exception:
                 pass
+
+    async def _run_imap_import(
+        self, db: AsyncSession, job: ImportJob, account: EmailAccount,
+        credential: str, since: date,
+    ) -> bool:
+        """Original IMAP historical-import path. Returns True if cancelled."""
+        from app.services.imap_client import open_connection
+        from app.services.mail_sync import apply_read_flags, upsert_mails
+
+        client = await open_connection(account, credential)
+        try:
+            await asyncio.to_thread(client.select_folder, "INBOX")
+            uids = await asyncio.to_thread(client.search_since, since)
+            job.total = len(uids)
+            await db.commit()
+
+            # --- Skip already-imported messages ---
+            # Fetch only Message-ID headers (very fast, ~100 bytes/msg)
+            # and filter out UIDs whose Message-ID already exists in DB.
+            # This avoids downloading full RFC822 for duplicates.
+            if uids:
+                uid_to_mid = await asyncio.to_thread(
+                    client.fetch_message_ids, uids
+                )
+                existing_mids = await _existing_message_ids(
+                    db, account.id
+                )
+                existing_uids = [
+                    u
+                    for u in uids
+                    if uid_to_mid.get(u, f"synthetic:{u}")
+                    in existing_mids
+                ]
+                new_uids = [
+                    u
+                    for u in uids
+                    if uid_to_mid.get(u, f"synthetic:{u}")
+                    not in existing_mids
+                ]
+                skipped = len(uids) - len(new_uids)
+                if skipped:
+                    job.total = len(new_uids)
+                    await db.commit()
+                # Existing rows were deduped out of the full fetch —
+                # reconcile their read state from live FLAGS so a
+                # re-import corrects stale is_read values.
+                if existing_uids:
+                    flags = await asyncio.to_thread(
+                        client.fetch_flags, existing_uids
+                    )
+                    await apply_read_flags(
+                        db, account.id, uid_to_mid, flags
+                    )
+                uids = new_uids
+
+            processed = 0
+            for i in range(0, len(uids), PROGRESS_BATCH):
+                if self._is_cancelled(job):
+                    return True
+                batch = uids[i : i + PROGRESS_BATCH]
+                mails = await asyncio.to_thread(client.fetch_normalised, batch)
+                await upsert_mails(db, account, mails)
+                processed += len(batch)
+                job.processed = processed
+                await db.commit()
+        finally:
+            await asyncio.to_thread(client.logout)
+        return False
+
+    async def _run_graph_import(
+        self, db: AsyncSession, job: ImportJob, account: EmailAccount,
+        credential: str, since: date,
+    ) -> bool:
+        """Microsoft Graph historical-import path. Returns True if cancelled.
+
+        Graph returns complete message objects in the list response, so each
+        page is normalised and upserted directly (ON CONFLICT refreshes is_read
+        for rows imported by an earlier run).
+        """
+        from app.services import ms_graph
+        from app.services.mail_sync import upsert_mails
+
+        processed = 0
+        async for page, total in ms_graph.iter_messages(
+            credential, since=since, max_pages=200
+        ):
+            if self._is_cancelled(job):
+                return True
+            mails = [ms_graph.normalize_message(m) for m in page]
+            await upsert_mails(db, account, mails)
+            processed += len(mails)
+            job.total = total if total is not None else processed
+            job.processed = processed
+            await db.commit()
+        return False
+
+    def _is_cancelled(self, job: ImportJob) -> bool:
+        """Check + consume the cooperative cancel flag, marking the job."""
+        if job.id not in self._cancel_flags:
+            return False
+        self._cancel_flags.discard(job.id)
+        job.status = ImportStatus.CANCELLED
+        job.finished_at = datetime.now(timezone.utc)
+        return True
 
 
 # Module-level singleton (single FastAPI worker). For multi-worker deployments,

@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.email import UnifiedEmail
 from app.models.email_account import AuthType, EmailAccount, SyncStatus
-from app.services import crypto, oauth
+from app.services import crypto, ms_graph, oauth
 from app.services.imap_client import ImapClient, NormalisedMail, open_connection
 
 
@@ -151,10 +151,17 @@ async def test_connection(
     *, auth_type: AuthType, platform: str, email_addr: str, imap_server: str,
     imap_port: int, credential: str,
 ) -> bool:
-    """Validate that a credential can authenticate against the IMAP server.
+    """Validate that a credential can authenticate against the mailbox.
 
-    Used by the "add account" flow before persisting anything. Raises on failure.
+    * OAuth Microsoft accounts authenticate against the Graph API (they no
+      longer hold an IMAP scope).
+    * Everything else authenticates over IMAP.
+    Raises on failure.
     """
+    if auth_type == AuthType.OAUTH_MICROSOFT:
+        await ms_graph.fetch_user_profile(credential)
+        return True
+
     client = ImapClient(imap_server, imap_port)
     await asyncio.to_thread(client.connect)
     try:
@@ -178,55 +185,18 @@ async def sync_account(
     """Pull new mail for one account since ``since`` (default: last 7 days).
 
     Returns the number of upserted rows. Updates account sync metadata.
+    Microsoft OAuth accounts are read via the Graph REST API; all others
+    (including Gmail OAuth) use IMAP.
     """
     if since is None:
         since = date.today() - timedelta(days=7)
 
     await _set_status(db, account, SyncStatus.SYNCING, error="")
     try:
-        credential = await resolve_credential(account)
-        client = await open_connection(account, credential)
-        try:
-            await asyncio.to_thread(client.select_folder, "INBOX")
-            uids = await asyncio.to_thread(client.search_since, since)
-            if limit:
-                uids = uids[-limit:]  # most recent N
-
-            # Skip already-imported messages: fetch only Message-ID headers
-            # (fast), then filter out UIDs whose Message-ID is already in DB.
-            if uids:
-                uid_to_mid = await asyncio.to_thread(
-                    client.fetch_message_ids, uids
-                )
-                existing_result = await db.execute(
-                    select(UnifiedEmail.message_id).where(
-                        UnifiedEmail.account_id == account.id
-                    )
-                )
-                existing_mids = {r[0] for r in existing_result.all() if r[0]}
-                existing_uids = [
-                    u
-                    for u in uids
-                    if uid_to_mid.get(u, f"synthetic:{u}") in existing_mids
-                ]
-                uids = [
-                    u
-                    for u in uids
-                    if uid_to_mid.get(u, f"synthetic:{u}") not in existing_mids
-                ]
-
-            mails: list[NormalisedMail] = []
-            if uids:
-                mails = await asyncio.to_thread(client.fetch_normalised, uids)
-            # Messages already in the DB were deduped out of the full fetch,
-            # so their is_read may be stale — reconcile it from live FLAGS.
-            if existing_uids:
-                flags = await asyncio.to_thread(client.fetch_flags, existing_uids)
-                await apply_read_flags(db, account.id, uid_to_mid, flags)
-        finally:
-            await asyncio.to_thread(client.logout)
-
-        count = await upsert_mails(db, account, mails)
+        if account.auth_type == AuthType.OAUTH_MICROSOFT:
+            count = await _sync_account_graph(db, account, since=since, limit=limit)
+        else:
+            count = await _sync_account_imap(db, account, since=since, limit=limit)
         account.last_synced_at = datetime.now(timezone.utc)
         account.sync_status = SyncStatus.IDLE
         account.last_error = ""
@@ -237,6 +207,73 @@ async def sync_account(
         account.last_error = str(exc)[:500]
         await db.commit()
         raise
+
+
+async def _sync_account_graph(
+    db: AsyncSession, account: EmailAccount, *, since: date, limit: Optional[int] = None
+) -> int:
+    """Fetch the inbox window via Microsoft Graph and upsert it.
+
+    The list response already contains every field we persist (subject, body
+    preview, headers, isRead...), so there is no separate body-fetch pass; the
+    upsert's ``ON CONFLICT`` clause refreshes ``is_read`` for existing rows.
+    """
+    credential = await resolve_credential(account)
+    messages = await ms_graph.list_messages(credential, since=since)
+    if limit and len(messages) > limit:
+        messages = messages[:limit]
+    mails = [ms_graph.normalize_message(m) for m in messages]
+    return await upsert_mails(db, account, mails)
+
+
+async def _sync_account_imap(
+    db: AsyncSession, account: EmailAccount, *, since: date, limit: Optional[int] = None
+) -> int:
+    """Original IMAP sync path (all non-Microsoft-OAuth accounts)."""
+    credential = await resolve_credential(account)
+    client = await open_connection(account, credential)
+    try:
+        await asyncio.to_thread(client.select_folder, "INBOX")
+        uids = await asyncio.to_thread(client.search_since, since)
+        if limit:
+            uids = uids[-limit:]  # most recent N
+
+        # Skip already-imported messages: fetch only Message-ID headers
+        # (fast), then filter out UIDs whose Message-ID is already in DB.
+        existing_uids: list[str] = []
+        if uids:
+            uid_to_mid = await asyncio.to_thread(
+                client.fetch_message_ids, uids
+            )
+            existing_result = await db.execute(
+                select(UnifiedEmail.message_id).where(
+                    UnifiedEmail.account_id == account.id
+                )
+            )
+            existing_mids = {r[0] for r in existing_result.all() if r[0]}
+            existing_uids = [
+                u
+                for u in uids
+                if uid_to_mid.get(u, f"synthetic:{u}") in existing_mids
+            ]
+            uids = [
+                u
+                for u in uids
+                if uid_to_mid.get(u, f"synthetic:{u}") not in existing_mids
+            ]
+
+        mails: list[NormalisedMail] = []
+        if uids:
+            mails = await asyncio.to_thread(client.fetch_normalised, uids)
+        # Messages already in the DB were deduped out of the full fetch,
+        # so their is_read may be stale — reconcile it from live FLAGS.
+        if existing_uids:
+            flags = await asyncio.to_thread(client.fetch_flags, existing_uids)
+            await apply_read_flags(db, account.id, uid_to_mid, flags)
+    finally:
+        await asyncio.to_thread(client.logout)
+
+    return await upsert_mails(db, account, mails)
 
 
 async def _set_status(db: AsyncSession, account: EmailAccount, status: SyncStatus, *, error: str = "") -> None:

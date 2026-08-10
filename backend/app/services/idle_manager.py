@@ -41,7 +41,24 @@ class IdleManager:
     # -- public API -----------------------------------------------------------
 
     async def start(self, account_id: int) -> bool:
-        """Start IDLE monitoring for an account. Returns False if already running."""
+        """Start IDLE monitoring for an account. Returns False if already
+        running, or if the account can't use IMAP IDLE (Microsoft OAuth
+        accounts read via Graph and rely on the background polling loop)."""
+        async with SessionLocal() as db:
+            account = await db.get(EmailAccount, account_id)
+        if account is None:
+            return False
+        # Microsoft Graph accounts have no IMAP scope — polling only.
+        if account.auth_type == "oauth_microsoft":
+            self._status[account_id] = {
+                "running": False,
+                "last_event_at": None,
+                "events": 0,
+                "last_sync_count": 0,
+                "error": "Graph account — polling only",
+            }
+            return False
+
         existing = self._tasks.get(account_id)
         if existing and not existing.done():
             return False

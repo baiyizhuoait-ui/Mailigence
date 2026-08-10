@@ -81,6 +81,13 @@ async def sync_sent(
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    since = date.today() - timedelta(days=30)
+
+    # Microsoft OAuth accounts sync their Sent folder through the Graph API;
+    # everything else uses IMAP.
+    if account.auth_type == "oauth_microsoft":
+        return await _sync_sent_graph(db, account, since)
+
     client: ImapClient | None = None
     try:
         credential = await resolve_credential(account)
@@ -90,7 +97,6 @@ async def sync_sent(
         if sent_folder is None:
             return {"imported": 0, "matched": 0, "message": "未找到已发送文件夹"}
 
-        since = date.today() - timedelta(days=30)
         uids = await asyncio.to_thread(client.search_since, since)
         if not uids:
             await upsert_mails(db, account, [])
@@ -122,6 +128,22 @@ async def sync_sent(
     finally:
         if client is not None:
             await asyncio.to_thread(client.logout)
+
+
+async def _sync_sent_graph(
+    db: AsyncSession, account: EmailAccount, since: date
+) -> dict:
+    """Sync the Sent folder of a Microsoft OAuth account via Graph."""
+    from app.services import ms_graph
+
+    credential = await resolve_credential(account)
+    messages = await ms_graph.list_messages(credential, since=since, sent=True)
+    sent_mails = [
+        ms_graph.normalize_message(m, MailDirection.SENT) for m in messages
+    ]
+    await upsert_mails(db, account, sent_mails)
+    matched = await _update_has_reply(db, account.id)
+    return {"imported": len(sent_mails), "matched": matched}
 
 
 @router.get("/pending", response_model=list[EmailOut])

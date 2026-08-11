@@ -14,15 +14,29 @@ Mailigence is a self-hosted email aggregation and AI analysis tool. Connect Gmai
 
 ## ✨ Features
 
-- **Multi-account aggregation** — Manage all your mailboxes (Gmail / Outlook / QQ Mail / 163 / any IMAP server) from one dashboard, with support for both app-specific passwords and OAuth2
+### 🤖 AI Intelligence
 - **AI-powered analysis** — Every email is automatically classified (work / meetings / finance / notifications / ads…), scored by priority, and given a suggested action. A pure rule-based mode is also available for zero-cost, fully offline operation
-- **To-do dashboard** — A two-column bento layout: an AI daily briefing + schedule timeline on the left, statistics + a priority queue on the right. Handled emails automatically drop out of the queue, and older ones auto-archive
-- **Schedule extraction** — AI pulls meetings, deadlines, and appointments out of your emails and groups them into Today / Tomorrow / This Week / Upcoming
-- **Real-time sync** — IMAP IDLE pushes new emails instantly; servers that don't support IDLE fall back to 2-minute polling. Manual force-sync is also available
+- **AI memory system** — Tell the AI your preferences in the chat box on the Settings page (e.g. "always treat Amazon promos as ads", "pin my boss's emails to the top"), and it distills them into memories that are applied to every subsequent analysis — it gets smarter the more you use it
+- **Dynamic categories** — No manual setup needed: the AI automatically discovers and creates new categories as they appear in your mail. You can also add / rename / delete categories yourself; deleting a category re-queues its emails for re-classification
+- **Schedule extraction** — AI pulls meetings, deadlines, and appointments from email bodies — understanding natural phrases like "tomorrow", "next Monday" or "3pm" — and groups them into Today / Tomorrow / This Week / Upcoming
+
+### 📬 Reading & Handling
+- **Multi-account aggregation** — Manage all your mailboxes (Gmail / Outlook / QQ Mail / 163 / any IMAP server) from one dashboard, with support for both app-specific passwords and OAuth2; importing preserves the original read/unread state
+- **Batch inbox actions** — Select emails across accounts and mark as read / archive / star in one click, just like a mainstream mail client
+- **Read full emails without logging in** — Open any email and read its complete body on demand (fetched from the server), rendered in a safe sandboxed iframe
+- **To-do dashboard** — A bento layout combining an AI daily briefing, a schedule timeline, statistics, and a priority queue; handled emails automatically drop out of the queue, and older ones auto-archive
+- **Click-to-read priority queue** — Open an email straight from the priority queue and read it, no need to jump to the inbox
+- **Real-time sync** — IMAP IDLE pushes new emails instantly; servers without IDLE fall back to 2-minute polling; a background sweep re-analyzes missed / uncategorized emails every 60 seconds
 - **Reply tracking** — Identifies emails that still need a reply, with one-click jump to respond
-- **Ad filtering** — Automatically detects marketing/promotional email, with support for a manual blocklist
-- **Analytics** — View email volume, priority distribution, and top senders by day/week/month
-- **Bilingual UI** — Chinese / English, light/dark themes, 5 accent color options
+
+### 🎨 Personalization
+- **11 accent colors + custom palette** — Amber, Blue, Green, Purple, Red, Teal, Indigo, Pink, Orange, Cyan, Slate — or pick any color with the built-in palette
+- **Custom per-account & per-category colors** — Assign a color to every mailbox account and email category so you can tell sources apart at a glance
+- **Dark / light themes & bilingual UI** — One-click dark/light switching, seamless Chinese / English switching
+
+### 📊 Data & Control
+- **Ad filtering** — Automatically detects marketing/promotional email, with a blocklist manager and one-click bulk cleanup
+- **Analytics** — View email volume, priority distribution, and top senders by day / week / month
 
 ## 🧱 Tech Stack
 

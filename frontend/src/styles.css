@@ -21,9 +21,10 @@
   --error-soft: rgba(224, 122, 95, 0.14);
   --shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
 
-  --font-display: "Fraunces", Georgia, serif;
-  --font-body: "IBM Plex Sans", -apple-system, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: Georgia, "Times New Roman", "Songti SC", "STSong", "SimSun", serif;
+  --font-body: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC",
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
 
   --platform-gmail: #d9534f;
   --platform-outlook: #2f80ed;

@@ -29,6 +29,7 @@ from app.models.email_category import EmailCategory
 from app.services.ai_analyzer import AnalysisResult, analyze_email
 from app.services.ai_config import load_ai_config
 from app.services.categories import list_category_names
+from app.services.memories import get_memory_texts
 
 ANALYSIS_BATCH = 50  # max emails analyzed per background run
 
@@ -69,6 +70,8 @@ async def run_analysis(
     # Existing category names — the LLM reuses them and only invents new ones
     # when nothing fits; new names are auto-registered below.
     category_names = await list_category_names(db)
+    # User's distilled preferences (AI memory) injected into the LLM prompt.
+    memories = await get_memory_texts(db)
 
     for email in emails:
         # Dedup cache only applies to never-analyzed mail (cost control for
@@ -91,6 +94,7 @@ async def run_analysis(
                 email.raw_headers,
                 config=cfg,
                 categories=category_names,
+                memories=memories,
             )
             category_names = await _register_categories(
                 db, category_names, [result.category]

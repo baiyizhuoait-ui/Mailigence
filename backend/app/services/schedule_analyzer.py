@@ -40,6 +40,9 @@ def invalidate_cache() -> None:
 _SCHEDULE_PROMPT = """你是一名邮件优先级分析助手。以下是用户的邮件列表（JSON数组），每封邮件包含 id, priority, action, subject, summary, body, received_at 字段。body 是邮件正文预览，请优先从 body 和 subject 中识别日程信息。
 今天是 {today}。请分析这些邮件并返回处理建议。
 
+用户偏好记忆（分析时优先遵守）：
+{memories}
+
 只返回一个JSON对象（不要任何额外文字、不要markdown代码块），格式如下：
 {{
   "schedule_items": [
@@ -266,7 +269,12 @@ async def _analyze_with_llm(
             "received_at": e.received_at.isoformat() if e.received_at else "",
         })
     user_content = json.dumps(mail_list, ensure_ascii=False)
-    system_prompt = _SCHEDULE_PROMPT.format(today=today)
+
+    # Inject the user's distilled preferences (AI memory), if any.
+    from app.services.memories import get_memory_texts
+    memories = await get_memory_texts(db)
+    memory_block = "\n".join(f"- {m}" for m in memories) or "（无）"
+    system_prompt = _SCHEDULE_PROMPT.format(today=today, memories=memory_block)
 
     if cfg.provider == "anthropic":
         parsed = await _anthropic_schedule(cfg, system_prompt, user_content)

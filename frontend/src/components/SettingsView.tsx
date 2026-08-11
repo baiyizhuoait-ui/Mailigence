@@ -8,11 +8,19 @@ import {
   type ThemeMode,
 } from "../i18n";
 import type {
+  AiMemory,
   AiProvider,
   AiSettings,
   AnalysisMode,
+  EmailAccount,
   EmailCategory,
 } from "../types";
+
+// Preset swatches for category / account colors.
+const COLOR_PRESETS = [
+  "#4a9eff", "#14b8a6", "#5cb874", "#e8b04b", "#f97316",
+  "#e0725f", "#ec4899", "#a073d4", "#6366f1", "#06b6d4", "#64748b", "#9ca3af",
+];
 
 interface AiPreset {
   id: string;
@@ -40,7 +48,8 @@ const MODE_KEYS: { mode: AnalysisMode; labelKey: string; descKey: string }[] = [
 ];
 
 export function SettingsView() {
-  const { t, lang, theme, accent, setLang, setTheme, setAccent } = useI18n();
+  const { t, lang, theme, accent, customAccent, setLang, setTheme, setAccent, setCustomAccent } =
+    useI18n();
 
   // ---- AI settings state ----
   const [mode, setMode] = useState<AnalysisMode>("auto");
@@ -62,6 +71,17 @@ export function SettingsView() {
   const [catMsg, setCatMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [editingLabel, setEditingLabel] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
+
+  // ---- account color state ----
+  const [accounts, setAccounts] = useState<EmailAccount[]>([]);
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // ---- AI memory state ----
+  const [memories, setMemories] = useState<AiMemory[]>([]);
+  const [memDraft, setMemDraft] = useState("");
+  const [memBusy, setMemBusy] = useState(false);
+  const [memMsg, setMemMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const loadCategories = useCallback(async () => {
     try {
@@ -94,6 +114,98 @@ export function SettingsView() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  // Load accounts for the color picker.
+  const loadAccounts = useCallback(async () => {
+    try {
+      setAccounts(await api.listAccounts());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAccounts();
+  }, [loadAccounts]);
+
+  // Load AI memory entries.
+  const loadMemories = useCallback(async () => {
+    try {
+      setMemories(await api.listMemories());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMemories();
+  }, [loadMemories]);
+
+  // ---- color handlers ----
+  async function changeCategoryColor(id: number, color: string) {
+    setCatBusy(true);
+    setCatMsg(null);
+    try {
+      await api.updateCategory(id, { color });
+      await loadCategories();
+    } catch (e) {
+      setCatMsg({
+        ok: false,
+        text: `${t("catmgmt.colorFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setCatBusy(false);
+    }
+  }
+
+  async function changeAccountColor(id: number, color: string | null) {
+    setAccountBusy(true);
+    setAccountMsg(null);
+    try {
+      await api.updateAccount(id, { color });
+      await loadAccounts();
+    } catch (e) {
+      setAccountMsg({
+        ok: false,
+        text: `${t("account.colorFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  // ---- AI memory handlers ----
+  async function sendMemory() {
+    const text = memDraft.trim();
+    if (!text || memBusy) return;
+    setMemBusy(true);
+    setMemMsg(null);
+    try {
+      const created = await api.createMemory(text);
+      setMemDraft("");
+      await loadMemories();
+      setMemMsg({
+        ok: true,
+        text: `${t("mem.saved")}${created.length > 0 ? `（+${created.length}）` : ""}`,
+      });
+    } catch (e) {
+      setMemMsg({
+        ok: false,
+        text: `${t("mem.failed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setMemBusy(false);
+    }
+  }
+
+  async function removeMemory(id: number) {
+    try {
+      await api.deleteMemory(id);
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+    } catch {
+      /* ignore */
+    }
+  }
 
   function applyPreset(id: string) {
     const preset = AI_PRESETS.find((p) => p.id === id);
@@ -323,6 +435,48 @@ export function SettingsView() {
             )}
           </div>
         </div>
+
+        {/* AI Memory — hidden in pure-rule mode (needs an LLM) */}
+        {mode !== "rules_only" && (
+          <div className="mem-block">
+            <span className="mem-title">{t("mem.title")}</span>
+            <textarea
+              className="settings-input mem-input"
+              rows={3}
+              value={memDraft}
+              onChange={(e) => setMemDraft(e.target.value)}
+              placeholder={t("mem.placeholder")}
+            />
+            <div className="mem-actions">
+              <button
+                className="btn small primary"
+                onClick={sendMemory}
+                disabled={memBusy || !memDraft.trim()}
+              >
+                {memBusy ? t("mem.distilling") : t("mem.send")}
+              </button>
+              {memMsg && (
+                <span className={`sync-result ${memMsg.ok ? "" : "error"}`}>{memMsg.text}</span>
+              )}
+            </div>
+            {memories.length > 0 && (
+              <ul className="mem-list">
+                {memories.map((m) => (
+                  <li key={m.id} className="mem-item">
+                    <span className="mem-item-text">{m.content}</span>
+                    <button
+                      className="btn small ghost"
+                      onClick={() => removeMemory(m.id)}
+                      title={t("action.delete")}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </section>
 
       {/* Appearance */}
@@ -352,18 +506,35 @@ export function SettingsView() {
         <div className="settings-row">
           <span className="settings-label">{t("settings.accent")}</span>
           <div className="accent-swatches">
-            {ACCENT_PRESETS.map((p) => (
-              <button
-                key={p.id}
-                className={`accent-swatch ${accent === p.id ? "active" : ""}`}
-                style={{ background: p.color }}
-                onClick={() => setAccent(p.id as AccentColor)}
-                title={lang === "zh" ? p.labelZh : p.labelEn}
-                aria-label={lang === "zh" ? p.labelZh : p.labelEn}
-              >
-                {accent === p.id && <span className="swatch-check">✓</span>}
-              </button>
-            ))}
+            {ACCENT_PRESETS.map((p) =>
+              p.id === "custom" ? (
+                <label
+                  key={p.id}
+                  className={`accent-swatch accent-custom ${accent === "custom" ? "active" : ""}`}
+                  style={{ background: accent === "custom" && customAccent ? customAccent : p.color }}
+                  title={lang === "zh" ? p.labelZh : p.labelEn}
+                >
+                  <input
+                    type="color"
+                    className="accent-color-input"
+                    value={accent === "custom" && customAccent ? customAccent : p.color}
+                    onChange={(e) => setCustomAccent(e.target.value)}
+                  />
+                  {accent === "custom" && <span className="swatch-check">✓</span>}
+                </label>
+              ) : (
+                <button
+                  key={p.id}
+                  className={`accent-swatch ${accent === p.id ? "active" : ""}`}
+                  style={{ background: p.color }}
+                  onClick={() => setAccent(p.id as AccentColor)}
+                  title={lang === "zh" ? p.labelZh : p.labelEn}
+                  aria-label={lang === "zh" ? p.labelZh : p.labelEn}
+                >
+                  {accent === p.id && <span className="swatch-check">✓</span>}
+                </button>
+              ),
+            )}
           </div>
         </div>
       </section>
@@ -388,6 +559,56 @@ export function SettingsView() {
             </button>
           </div>
         </div>
+      </section>
+
+      {/* Account colors */}
+      <section className="settings-section">
+        <h3 className="settings-section-title">{t("account.colorTitle")}</h3>
+        {accounts.length === 0 ? (
+          <span className="settings-hint">{t("misc.noAccounts")}</span>
+        ) : (
+          <div className="settings-row">
+            <span className="settings-label">{t("account.colorTitle")}</span>
+            <ul className="account-color-list">
+              {accounts.map((a) => (
+                <li key={a.id} className="account-color-item">
+                  <span className="mono account-color-email">{a.email}</span>
+                  <span className="color-swatches">
+                    {COLOR_PRESETS.map((c) => (
+                      <button
+                        key={c}
+                        className={`color-swatch ${a.color === c ? "active" : ""}`}
+                        style={{ background: c }}
+                        onClick={() => changeAccountColor(a.id, a.color === c ? null : c)}
+                        disabled={accountBusy}
+                        title={c}
+                      />
+                    ))}
+                    <label
+                      className="color-swatch color-swatch-custom"
+                      style={{ background: a.color ?? "#9ca3af" }}
+                      title={t("mem.customColor")}
+                    >
+                      <input
+                        type="color"
+                        className="accent-color-input"
+                        value={a.color ?? "#9ca3af"}
+                        onChange={(e) => changeAccountColor(a.id, e.target.value)}
+                        disabled={accountBusy}
+                      />
+                    </label>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {accountMsg && (
+          <div className="settings-row">
+            <span className="settings-label" />
+            <span className={`sync-result ${accountMsg.ok ? "" : "error"}`}>{accountMsg.text}</span>
+          </div>
+        )}
       </section>
 
       {/* Category management */}
@@ -424,10 +645,19 @@ export function SettingsView() {
           <ul className="cat-list">
             {categories.map((c) => (
               <li key={c.id} className="cat-item">
-                <span
-                  className="cat-swatch"
-                  style={{ background: c.color ?? "#9ca3af" }}
-                />
+                <label className="cat-color-wrap" title={t("catmgmt.colorHint")}>
+                  <span
+                    className="cat-swatch"
+                    style={{ background: c.color ?? "#9ca3af" }}
+                  />
+                  <input
+                    type="color"
+                    className="cat-color-input"
+                    value={c.color ?? "#9ca3af"}
+                    onChange={(e) => changeCategoryColor(c.id, e.target.value)}
+                    disabled={catBusy}
+                  />
+                </label>
                 {editingLabel === c.id ? (
                   <input
                     className="settings-input cat-rename-input"

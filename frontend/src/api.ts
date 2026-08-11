@@ -1,5 +1,6 @@
 import type {
   AdStats,
+  AiMemory,
   AiSettings,
   AiSettingsInput,
   BatchAdAction,
@@ -80,6 +81,12 @@ export const api = {
 
   deleteAccount: (id: number) =>
     request<void>(`/accounts/${id}`, { method: "DELETE" }),
+
+  updateAccount: (id: number, payload: { display_name?: string; color?: string | null }) =>
+    request<EmailAccount>(`/accounts/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 
   syncAccount: (id: number, days = 7) =>
     request<SyncResult>(`/accounts/${id}/sync?days=${days}`, { method: "POST" }),
@@ -282,4 +289,17 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+
+  // ---------------- AI memory ----------------
+
+  listMemories: () => request<AiMemory[]>("/ai/memories"),
+
+  createMemory: (text: string) =>
+    request<AiMemory[]>("/ai/memories", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+
+  deleteMemory: (id: number) =>
+    request<{ deleted: number }>(`/ai/memories/${id}`, { method: "DELETE" }),
 };

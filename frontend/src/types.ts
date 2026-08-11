@@ -15,6 +15,7 @@ export interface EmailAccount {
   platform: string;
   email: string;
   display_name: string;
+  color: string | null;
   auth_type: AuthType;
   imap_server: string;
   imap_port: number;
@@ -272,4 +273,11 @@ export interface AiSettingsInput {
   model: string;
   api_key: string;
   clear_api_key: boolean;
+}
+
+// ---------------- AI memory ----------------
+
+export interface AiMemory {
+  id: number;
+  content: string;
 }

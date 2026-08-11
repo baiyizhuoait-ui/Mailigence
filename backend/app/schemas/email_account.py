@@ -99,6 +99,7 @@ class AccountOut(BaseModel):
     platform: str
     email: str
     display_name: str
+    color: Optional[str] = None
     auth_type: AuthType
     imap_server: str
     imap_port: int
@@ -110,6 +111,13 @@ class AccountOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AccountUpdate(BaseModel):
+    """Editable account fields (display name / accent color)."""
+
+    display_name: Optional[str] = None
+    color: Optional[str] = None
 
 
 class SyncResult(BaseModel):

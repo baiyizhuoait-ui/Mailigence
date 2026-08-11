@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Enum, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-
 from app.database import Base
 
 
@@ -55,6 +54,10 @@ class EmailAccount(Base):
     smtp_port: Mapped[int] = mapped_column(Integer, default=465)
 
     display_name: Mapped[str] = mapped_column(String(120), default="")
+
+    # UI accent color for this mailbox (hex like "#4a9eff"); used to visually
+    # distinguish accounts across views. Null = platform default.
+    color: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     sync_status: Mapped[SyncStatus] = mapped_column(
         Enum(SyncStatus, name="sync_status"), default=SyncStatus.IDLE

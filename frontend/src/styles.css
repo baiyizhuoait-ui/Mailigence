@@ -59,6 +59,36 @@
   --accent-2: #ec8a78;
   --accent-soft: rgba(224, 114, 95, 0.14);
 }
+[data-accent="teal"] {
+  --accent: #14b8a6;
+  --accent-2: #2dd4bf;
+  --accent-soft: rgba(20, 184, 166, 0.14);
+}
+[data-accent="indigo"] {
+  --accent: #6366f1;
+  --accent-2: #818cf8;
+  --accent-soft: rgba(99, 102, 241, 0.14);
+}
+[data-accent="pink"] {
+  --accent: #ec4899;
+  --accent-2: #f472b6;
+  --accent-soft: rgba(236, 72, 153, 0.14);
+}
+[data-accent="orange"] {
+  --accent: #f97316;
+  --accent-2: #fb923c;
+  --accent-soft: rgba(249, 115, 22, 0.14);
+}
+[data-accent="cyan"] {
+  --accent: #06b6d4;
+  --accent-2: #22d3ee;
+  --accent-soft: rgba(6, 182, 212, 0.14);
+}
+[data-accent="slate"] {
+  --accent: #64748b;
+  --accent-2: #94a3b8;
+  --accent-soft: rgba(100, 116, 139, 0.16);
+}
 
 /* ---- Light theme ---- */
 
@@ -382,6 +412,7 @@ button {
 .account-card {
   background: var(--panel);
   border: 1px solid var(--border);
+  border-left: 4px solid transparent;
   border-radius: 14px;
   padding: 14px 18px;
   display: flex;
@@ -2400,7 +2431,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  max-width: 660px;
+  /* No fixed width: sections stretch with the window. */
+  width: 100%;
 }
 
 .settings-section {
@@ -2523,6 +2555,140 @@ button {
   height: 14px;
   border-radius: 4px;
   flex-shrink: 0;
+}
+
+/* Clickable color swatch: the hidden <input type=color> opens the native
+   picker on click; the span shows the current color. */
+.cat-color-wrap {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.cat-color-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+/* Account color pickers */
+.account-color-list {
+  width: 100%;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.account-color-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.account-color-email {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.color-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s ease;
+}
+
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+
+.color-swatch.active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+
+/* AI memory block */
+.mem-block {
+  border-top: 1px dashed var(--border);
+  padding-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mem-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mem-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mem-input {
+  resize: vertical;
+  min-height: 64px;
+}
+
+.mem-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mem-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mem-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.mem-item-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
 }
 
 .cat-name {
@@ -2691,6 +2857,29 @@ button {
 .accent-swatches {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Custom-color picker: transparent <input type=color> covering the swatch */
+.accent-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.accent-swatch.accent-custom {
+  overflow: hidden;
+}
+
+.color-swatch-custom {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--border);
 }
 
 .accent-swatch {

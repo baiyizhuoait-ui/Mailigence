@@ -10,6 +10,7 @@ from app.models.email_account import EmailAccount
 from app.schemas.email_account import (
     AccountCreateRequest,
     AccountOut,
+    AccountUpdate,
     SyncResult,
     TestConnectionRequest,
 )
@@ -88,6 +89,26 @@ async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)) ->
         raise HTTPException(status_code=404, detail="Account not found")
     await db.delete(account)
     await db.commit()
+
+
+@router.patch("/{account_id}", response_model=AccountOut)
+async def update_account(
+    account_id: int,
+    payload: AccountUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> EmailAccount:
+    """Update editable account fields (display name / accent color)."""
+    account = await db.get(EmailAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if payload.display_name is not None:
+        account.display_name = payload.display_name.strip()
+    if payload.color is not None:
+        color = payload.color.strip()
+        account.color = color or None
+    await db.commit()
+    await db.refresh(account)
+    return account
 
 
 @router.post("/{account_id}/sync", response_model=SyncResult)

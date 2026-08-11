@@ -121,7 +121,11 @@ export function AccountList({
         const idle = idleMap[a.id];
         const idleRunning = idle?.running ?? false;
         return (
-          <div key={a.id} className="account-card">
+          <div
+            key={a.id}
+            className="account-card"
+            style={{ borderLeftColor: a.color || undefined, borderLeftStyle: "solid" }}
+          >
             <div className="account-card-head">
               <span className={`platform-badge ${a.platform}`}>
                 {PLATFORM_LABEL[a.platform] ?? a.platform}

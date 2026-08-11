@@ -10,12 +10,17 @@ import {
 
 export type Lang = "zh" | "en";
 export type ThemeMode = "dark" | "light";
-export type AccentColor = "amber" | "blue" | "green" | "purple" | "red";
+export type AccentColor =
+  | "amber" | "blue" | "green" | "purple" | "red"
+  | "teal" | "indigo" | "pink" | "orange" | "cyan" | "slate"
+  | "custom";
 
 export interface Settings {
   lang: Lang;
   theme: ThemeMode;
   accent: AccentColor;
+  /** Custom accent hex (used when accent === "custom"). */
+  customAccent?: string;
 }
 
 // ---------------- Accent presets ----------------
@@ -31,6 +36,13 @@ export const ACCENT_PRESETS: {
   { id: "green", labelZh: "翠绿", labelEn: "Green", color: "#5cb874" },
   { id: "purple", labelZh: "紫罗兰", labelEn: "Purple", color: "#a073d4" },
   { id: "red", labelZh: "珊瑚红", labelEn: "Red", color: "#e0725f" },
+  { id: "teal", labelZh: "青碧", labelEn: "Teal", color: "#14b8a6" },
+  { id: "indigo", labelZh: "靛蓝", labelEn: "Indigo", color: "#6366f1" },
+  { id: "pink", labelZh: "樱花粉", labelEn: "Pink", color: "#ec4899" },
+  { id: "orange", labelZh: "活力橙", labelEn: "Orange", color: "#f97316" },
+  { id: "cyan", labelZh: "青色", labelEn: "Cyan", color: "#06b6d4" },
+  { id: "slate", labelZh: "岩灰", labelEn: "Slate", color: "#64748b" },
+  { id: "custom", labelZh: "自定义", labelEn: "Custom", color: "#8b5cf6" },
 ];
 
 // ---------------- Translations ----------------
@@ -95,6 +107,17 @@ const zh: Dict = {
   "catmgmt.deleteFailed": "删除失败：",
   "catmgmt.confirmDelete": "确认删除类别",
   "catmgmt.renameFailed": "重命名失败：",
+  "catmgmt.colorHint": "点击修改类别颜色",
+  "catmgmt.colorFailed": "修改颜色失败：",
+  "account.colorTitle": "邮箱颜色",
+  "account.colorFailed": "修改颜色失败：",
+  "mem.title": "AI 记忆",
+  "mem.placeholder": "输入你的邮件偏好…",
+  "mem.send": "整理并记住",
+  "mem.saved": "已记住",
+  "mem.failed": "整理失败：",
+  "mem.distilling": "AI 整理中…",
+  "mem.customColor": "自定义颜色",
   // Common actions
   "action.addAccount": "+ 添加账户",
   "action.sync7": "同步最近 7 天",
@@ -459,6 +482,17 @@ const en: Dict = {
   "catmgmt.deleteFailed": "Delete failed: ",
   "catmgmt.confirmDelete": "Delete category ",
   "catmgmt.renameFailed": "Rename failed: ",
+  "catmgmt.colorHint": "Click to change the category color",
+  "catmgmt.colorFailed": "Color update failed: ",
+  "account.colorTitle": "Mailbox colors",
+  "account.colorFailed": "Color update failed: ",
+  "mem.title": "AI Memory",
+  "mem.placeholder": "Type your mail preferences…",
+  "mem.send": "Distill & remember",
+  "mem.saved": "Saved",
+  "mem.failed": "Distillation failed: ",
+  "mem.distilling": "AI distilling…",
+  "mem.customColor": "Custom color",
   "action.addAccount": "+ Add Account",
   "action.sync7": "Sync last 7 days",
   "action.syncing": "Syncing…",
@@ -756,9 +790,11 @@ interface I18nContextValue {
   lang: Lang;
   theme: ThemeMode;
   accent: AccentColor;
+  customAccent: string;
   setLang: (l: Lang) => void;
   setTheme: (t: ThemeMode) => void;
   setAccent: (a: AccentColor) => void;
+  setCustomAccent: (hex: string) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
 }
 
@@ -775,12 +811,13 @@ function loadSettings(): Settings {
         lang: parsed.lang ?? "zh",
         theme: parsed.theme ?? "dark",
         accent: parsed.accent ?? "amber",
+        customAccent: parsed.customAccent || "",
       };
     }
   } catch {
     /* ignore */
   }
-  return { lang: "zh", theme: "dark", accent: "amber" };
+  return { lang: "zh", theme: "dark", accent: "amber", customAccent: "" };
 }
 
 function saveSettings(s: Settings) {
@@ -791,17 +828,41 @@ function saveSettings(s: Settings) {
   }
 }
 
-function applyTheme(theme: ThemeMode, accent: AccentColor) {
+function hexToRgba(hex: string, alpha: number): string {
+  let h = (hex || "").replace("#", "").trim();
+  if (h.length === 3) {
+    h = h
+      .split("")
+      .map((c) => c + c)
+      .join("");
+  }
+  const n = parseInt(h, 16);
+  if (isNaN(n)) return `rgba(139, 92, 246, ${alpha})`;
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+function applyTheme(theme: ThemeMode, accent: AccentColor, customAccent: string) {
   const root = document.documentElement;
   root.setAttribute("data-theme", theme);
-  root.setAttribute("data-accent", accent);
+  if (accent === "custom" && customAccent) {
+    root.setAttribute("data-accent", "custom");
+    root.style.setProperty("--accent", customAccent);
+    root.style.setProperty("--accent-2", customAccent);
+    root.style.setProperty("--accent-soft", hexToRgba(customAccent, 0.14));
+  } else {
+    // Restore the preset-derived CSS variables.
+    root.style.removeProperty("--accent");
+    root.style.removeProperty("--accent-2");
+    root.style.removeProperty("--accent-soft");
+    root.setAttribute("data-accent", accent);
+  }
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(loadSettings);
 
   useEffect(() => {
-    applyTheme(settings.theme, settings.accent);
+    applyTheme(settings.theme, settings.accent, settings.customAccent ?? "");
     saveSettings(settings);
   }, [settings]);
 
@@ -809,9 +870,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     lang: settings.lang,
     theme: settings.theme,
     accent: settings.accent,
+    customAccent: settings.customAccent ?? "",
     setLang: (lang) => setSettings((s) => ({ ...s, lang })),
     setTheme: (theme) => setSettings((s) => ({ ...s, theme })),
     setAccent: (accent) => setSettings((s) => ({ ...s, accent })),
+    setCustomAccent: (hex) =>
+      setSettings((s) => ({ ...s, accent: "custom", customAccent: hex })),
     t: (key: string, params?: Record<string, string | number>) => {
       let text: string = DICTS[settings.lang][key] ?? key;
       if (params) {

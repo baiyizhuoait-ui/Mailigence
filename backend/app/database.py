@@ -56,6 +56,7 @@ async def init_db() -> None:
     recommended for production schema evolution (Stage 2+)."""
     # Import models so they register on Base.metadata before create_all.
     from app.models import (  # noqa: F401
+        ai_memory,
         app_setting,
         blocked_sender,
         email,
@@ -84,6 +85,11 @@ async def init_db() -> None:
         await conn.exec_driver_sql(
             "ALTER TABLE unified_emails "
             "ALTER COLUMN category TYPE VARCHAR(64)"
+        )
+        # User-customizable mailbox accent color (hex string, nullable).
+        await conn.exec_driver_sql(
+            "ALTER TABLE email_accounts "
+            "ADD COLUMN IF NOT EXISTS color VARCHAR(16)"
         )
         await _seed_categories(conn)
 

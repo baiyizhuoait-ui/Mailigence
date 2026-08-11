@@ -71,12 +71,21 @@ _PROMPT_NO_CATEGORIES = """
 判定要点：含 List-Unsubscribe/促销/退订等特征视为营销并低优先级；
 会议/工作邮件需要用户回应的高优先级；验证码/通知类为中低优先级。"""
 
+_PROMPT_MEMORIES = """
+用户偏好记忆（分析时优先遵守）：
+{memories}"""
 
-def _build_system_prompt(categories: list[str] | None) -> str:
-    if categories:
-        listed = "；".join(categories)
-        return _PROMPT_HEAD + _PROMPT_WITH_CATEGORIES.format(categories=listed)
-    return _PROMPT_HEAD + _PROMPT_NO_CATEGORIES
+
+def _build_system_prompt(categories: list[str] | None, memories: list[str] | None = None) -> str:
+    prompt = _PROMPT_HEAD + (
+        _PROMPT_WITH_CATEGORIES.format(categories="；".join(categories))
+        if categories
+        else _PROMPT_NO_CATEGORIES
+    )
+    if memories:
+        listed = "\n".join(f"- {m}" for m in memories)
+        prompt += _PROMPT_MEMORIES.format(memories=listed)
+    return prompt
 
 
 @dataclass
@@ -116,11 +125,14 @@ async def analyze_email(
     raw_headers: dict[str, Any] | None,
     config: AiConfig | None = None,
     categories: list[str] | None = None,
+    memories: list[str] | None = None,
 ) -> AnalysisResult:
     """Analyze one email according to the effective AI config.
 
     ``categories`` lists the currently-registered category names; the LLM is
     told to reuse them and only invent a new one when nothing fits.
+    ``memories`` are the user's distilled preferences, injected into the
+    system prompt so classification / priority follows them.
     auto: LLM when configured, graceful rule fallback otherwise.
     ai_only: always LLM (errors propagate).
     rules_only: pure programmatic analysis.
@@ -128,7 +140,7 @@ async def analyze_email(
     cfg = config or _default_config()
     if cfg.use_ai:
         try:
-            return await _analyze_with_llm(subject, snippet, cfg, categories)
+            return await _analyze_with_llm(subject, snippet, cfg, categories, memories)
         except Exception:
             if cfg.analysis_mode == "ai_only":
                 raise
@@ -141,12 +153,16 @@ async def analyze_email(
 # --- LLM path ---------------------------------------------------------------
 
 async def _analyze_with_llm(
-    subject: str, snippet: str, cfg: AiConfig, categories: list[str] | None
+    subject: str,
+    snippet: str,
+    cfg: AiConfig,
+    categories: list[str] | None,
+    memories: list[str] | None = None,
 ) -> AnalysisResult:
     # Truncate to control latency / cost.
     snippet = (snippet or "")[:800]
     user_content = f"主题：{subject or '(无主题)'}\n正文摘要：{snippet or '(无正文)'}"
-    system_prompt = _build_system_prompt(categories)
+    system_prompt = _build_system_prompt(categories, memories)
 
     if cfg.provider == "anthropic":
         content = await _anthropic_chat(cfg, user_content, system_prompt)

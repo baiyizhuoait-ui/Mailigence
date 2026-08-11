@@ -24,6 +24,7 @@ from app.api import (
     emails,
     idle,
     import_jobs,
+    memories,
     oauth,
     replies,
     reports,
@@ -191,3 +192,4 @@ app.include_router(reports.router)
 app.include_router(replies.router)
 app.include_router(idle.router)
 app.include_router(settings_router)
+app.include_router(memories.router)

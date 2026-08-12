@@ -91,7 +91,51 @@ if (-not $listening) {
             if (-not (Test-Path $PgData)) { throw "initdb failed" }
         }
         Write-Host "[3/6] Starting PostgreSQL on port $Port ..."
-        & $PgCtl -D $PgData -l $PgLog -o "-p $Port" -w start | Out-Null
+        # Robust start. pg_ctl spawns the postmaster as a console app that
+        # inherits this script's output handles, so a plain `& pg_ctl ... |
+        # Out-Null` never returns (the pipeline stays open while postgres runs)
+        # and the script appears frozen at this step even though the database
+        # actually came up. Launch pg_ctl detached and wait on the process
+        # instead — this also keeps postgres out of the user's console, so
+        # closing the launcher window no longer Ctrl+C-kills the database.
+        #
+        # Clean up a stale postmaster.pid left behind by an unclean shutdown
+        # (e.g. closing the console while postgres was running) so a leftover
+        # lock file owned by no live server never blocks startup.
+        $pidFile = Join-Path $PgData 'postmaster.pid'
+        if (Test-Path $pidFile) {
+            try {
+                $oldPid = [int]((Get-Content $pidFile -TotalCount 1).Trim())
+                $oldProc = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+                if (-not $oldProc -or $oldProc.ProcessName -ne 'postgres') {
+                    Write-Host "  Removing stale postmaster.pid (PID $oldPid is no longer a live postgres)"
+                    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+                    Remove-Item (Join-Path $PgData 'postmaster.opts') -Force -ErrorAction SilentlyContinue
+                }
+            } catch {
+                # Unreadable pid file and no listener on the port: it can only
+                # be stale, so drop it.
+                Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+        # Start pg_ctl fully detached. Do NOT use -Wait: waiting on pg_ctl
+        # hangs while the spawned postmaster keeps the console handles open.
+        # Readiness is verified below by polling the port instead.
+        $ctlArgs = "-D `"$PgData`" -l `"$PgLog`" -o `"-p $Port`" start"
+        Start-Process -FilePath $PgCtl -ArgumentList $ctlArgs -WindowStyle Hidden | Out-Null
+        $pgUp = $false
+        for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Milliseconds 500
+            if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+                $pgUp = $true
+                break
+            }
+        }
+        if (-not $pgUp) {
+            Write-Host "PostgreSQL did not become ready on port $Port. See $PgLog" -ForegroundColor Red
+            if (Test-Path $PgLog) { Get-Content $PgLog -Tail 10 }
+            exit 1
+        }
     } else {
         Write-Host "[3/6] Trying to start the system PostgreSQL service..."
         try {

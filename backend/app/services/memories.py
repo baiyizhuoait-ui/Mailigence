@@ -16,10 +16,11 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai_memory import AiMemory
+from app.models.email import UnifiedEmail
 from app.services.ai_config import AiConfig
 
 _log = logging.getLogger(__name__)
@@ -163,3 +164,16 @@ async def delete_memory(db: AsyncSession, memory_id: int) -> bool:
     await db.delete(row)
     await db.commit()
     return True
+
+
+async def requeue_all_emails(db: AsyncSession) -> int:
+    """Re-queue every stored email for a fresh classification pass.
+
+    Clears ``category`` (keeps ``analyzed_at``) so the analysis sweep picks the
+    mails up again. Because ``analyzed_at`` is kept, the dedup cache is skipped
+    and each mail gets a fresh LLM classification that honours the latest AI
+    memory — i.e. historical mail is re-classified under the new preferences.
+    """
+    result = await db.execute(update(UnifiedEmail).values(category=None))
+    await db.commit()
+    return result.rowcount or 0

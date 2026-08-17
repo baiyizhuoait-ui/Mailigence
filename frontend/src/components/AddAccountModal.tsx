@@ -6,11 +6,13 @@ import { NETEASE_IMAP_MAP, PROVIDER_PRESETS, type EmailAccount } from "../types"
 interface Props {
   onClose: () => void;
   onCreated: (account: EmailAccount) => void;
+  /** Which OAuth providers are configured (from /api/health). */
+  oauthConfig?: { google: boolean; microsoft: boolean };
 }
 
 type Step = "form" | "testing" | "error";
 
-export function AddAccountModal({ onClose, onCreated }: Props) {
+export function AddAccountModal({ onClose, onCreated, oauthConfig }: Props) {
   const { t } = useI18n();
   const [platform, setPlatform] = useState("gmail");
   const [emailLocal, setEmailLocal] = useState("");
@@ -222,11 +224,18 @@ export function AddAccountModal({ onClose, onCreated }: Props) {
             </p>
           )}
 
-          {preset.supports_oauth && (
-            <button className="btn ghost full" onClick={handleOAuth} disabled={step === "testing"}>
-              {t("modal.useOAuth")}
-            </button>
-          )}
+          {preset.supports_oauth &&
+            (oauthConfig?.[platform === "outlook" ? "microsoft" : "google"] ? (
+              <button className="btn ghost full" onClick={handleOAuth} disabled={step === "testing"}>
+                {t("modal.useOAuth")}
+              </button>
+            ) : (
+              <p className="hint">
+                {platform === "outlook"
+                  ? t("modal.oauthNotConfiguredOutlook")
+                  : t("modal.oauthNotConfiguredGoogle")}
+              </p>
+            ))}
 
           {step === "error" && error && (
             <div className="alert error">{error}</div>

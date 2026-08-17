@@ -15,6 +15,9 @@ interface Props {
   onImport: (account: EmailAccount) => void;
   /** When true, auto-start IDLE for all accounts (set by parent on first load). */
   autoStartIdle?: boolean;
+  /** One-time OAuth callback result banner shown above the list. */
+  notice?: { ok: boolean; text: string } | null;
+  onDismissNotice?: () => void;
 }
 
 export function AccountList({
@@ -23,6 +26,8 @@ export function AccountList({
   onDeleted,
   onImport,
   autoStartIdle,
+  notice,
+  onDismissNotice,
 }: Props) {
   const { t } = useI18n();
   const [busy, setBusy] = useState<number | null>(null);
@@ -107,6 +112,16 @@ export function AccountList({
   if (accounts.length === 0) {
     return (
       <div className="empty-state">
+        {notice && (
+          <div className={`sync-result ${notice.ok ? "" : "error"} oauth-notice`}>
+            <span>{notice.text}</span>
+            {onDismissNotice && (
+              <button className="icon-btn" onClick={onDismissNotice} aria-label="close">
+                ×
+              </button>
+            )}
+          </div>
+        )}
         <p className="empty-title">{t("misc.noAccounts")}</p>
         <p className="empty-sub">
           {t("misc.noAccountsSub")}
@@ -117,6 +132,16 @@ export function AccountList({
 
   return (
     <div className="account-list">
+      {notice && (
+        <div className={`sync-result ${notice.ok ? "" : "error"} oauth-notice`}>
+          <span>{notice.text}</span>
+          {onDismissNotice && (
+            <button className="icon-btn" onClick={onDismissNotice} aria-label="close">
+              ×
+            </button>
+          )}
+        </div>
+      )}
       {accounts.map((a) => {
         const idle = idleMap[a.id];
         const idleRunning = idle?.running ?? false;
@@ -145,7 +170,12 @@ export function AccountList({
                 : t("misc.notSynced")}
               {idle && idle.events > 0 && ` · ${t("idle.events")} ${idle.events} ${t("idle.times")}`}
             </div>
-            {idle?.error && <div className="account-error">⚠ IDLE: {idle.error}</div>}
+            {idle?.error &&
+              (idle.error === "polling_only" ? (
+                <div className="account-meta">· {t("idle.pollingOnly")}</div>
+              ) : (
+                <div className="account-error">⚠ IDLE: {idle.error}</div>
+              ))}
             {a.last_error && <div className="account-error">⚠ {a.last_error}</div>}
             <div className="account-actions">
               <button
@@ -162,22 +192,32 @@ export function AccountList({
               >
                 {a.sync_status === "syncing" ? t("action.importing") : t("action.importHistory")}
               </button>
-              <button
-                className={`btn small ${idleRunning ? "ghost" : "outline"}`}
-                disabled={idleBusy === a.id}
-                onClick={() => toggleIdle(a.id)}
-                title={
-                  idleRunning
-                    ? t("idle.stopListeningTitle")
-                    : t("idle.startListeningTitle")
-                }
-              >
-                {idleBusy === a.id
-                  ? "…"
-                  : idleRunning
-                    ? t("idle.stopListening")
-                    : t("idle.listening")}
-              </button>
+              {idle?.error === "polling_only" ? (
+                <button
+                  className="btn small ghost"
+                  disabled
+                  title={t("idle.pollingOnly")}
+                >
+                  {t("idle.pollingSync")}
+                </button>
+              ) : (
+                <button
+                  className={`btn small ${idleRunning ? "ghost" : "outline"}`}
+                  disabled={idleBusy === a.id}
+                  onClick={() => toggleIdle(a.id)}
+                  title={
+                    idleRunning
+                      ? t("idle.stopListeningTitle")
+                      : t("idle.startListeningTitle")
+                  }
+                >
+                  {idleBusy === a.id
+                    ? "…"
+                    : idleRunning
+                      ? t("idle.stopListening")
+                      : t("idle.listening")}
+                </button>
+              )}
               <button className="btn small ghost" onClick={() => remove(a.id)}>
                 {t("action.delete")}
               </button>

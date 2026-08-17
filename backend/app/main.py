@@ -38,8 +38,9 @@ from app.services.idle_manager import manager as idle_manager
 
 _log = logging.getLogger(__name__)
 
-# Background sync interval for servers that don't support IMAP IDLE.
-BACKGROUND_SYNC_SECONDS = 120
+# Background sync interval for servers that don't support IMAP IDLE
+# (including Microsoft Graph OAuth accounts, which have no IMAP scope).
+BACKGROUND_SYNC_SECONDS = 60
 # How often to sweep for emails still waiting on AI analysis (new imports that
 # exceeded one batch, or mails left uncategorized by a category delete).
 ANALYSIS_SWEEP_SECONDS = 60

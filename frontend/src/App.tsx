@@ -26,6 +26,8 @@ export default function App() {
     oauth_microsoft_configured: boolean;
   } | null>(null);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
+  /** One-time OAuth callback result banner (success / error / duplicate). */
+  const [oauthNotice, setOauthNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
   const refreshAccounts = useCallback(async () => {
     setLoadingAccounts(true);
@@ -43,11 +45,39 @@ export default function App() {
     api.health().then((h) =>
       setHealth({
         encryption_configured: h.encryption_configured,
-        oauth_google_configured: false,
-        oauth_microsoft_configured: false,
+        oauth_google_configured: h.oauth_google_configured,
+        oauth_microsoft_configured: h.oauth_microsoft_configured,
       }),
     );
   }, [refreshAccounts]);
+
+  // Surface the OAuth callback result (success / duplicate / error) that the
+  // backend redirects back with, then clean the URL so a refresh doesn't
+  // re-show it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("added") && !params.get("oauth_error") && !params.get("oauth_status")) {
+      return;
+    }
+    let notice: { ok: boolean; text: string } | null = null;
+    if (params.get("added")) {
+      notice = { ok: true, text: t("oauth.added") };
+    } else if (params.get("oauth_status") === "exists") {
+      notice = { ok: true, text: t("oauth.exists") };
+    } else if (params.get("oauth_status") === "stale") {
+      notice = { ok: true, text: t("oauth.stale") };
+    } else {
+      const code = params.get("oauth_error") ?? "unknown";
+      const key = `oauth.err.${code}`;
+      const mapped = t(key, { code });
+      const text = mapped === key ? t("oauth.err.generic", { code }) : mapped;
+      const detail = params.get("oauth_detail");
+      notice = { ok: false, text: detail ? `${text}：${detail}` : text };
+    }
+    setOauthNotice(notice);
+    setView("accounts");
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [t]);
 
   const accountCount = accounts.length;
 
@@ -150,6 +180,8 @@ export default function App() {
               onDeleted={refreshAccounts}
               onImport={(a) => setImportTarget(a)}
               autoStartIdle
+              notice={oauthNotice}
+              onDismissNotice={() => setOauthNotice(null)}
             />
           )
         ) : view === "ads" ? (
@@ -170,6 +202,10 @@ export default function App() {
       {showAdd && (
         <AddAccountModal
           onClose={() => setShowAdd(false)}
+          oauthConfig={{
+            google: health?.oauth_google_configured ?? false,
+            microsoft: health?.oauth_microsoft_configured ?? false,
+          }}
           onCreated={async (account) => {
             setShowAdd(false);
             await refreshAccounts();

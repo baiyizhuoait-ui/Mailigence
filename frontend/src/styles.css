@@ -539,6 +539,24 @@ button {
   color: var(--text-dim);
 }
 
+/* One-time OAuth callback result banner (accounts page). */
+.oauth-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+
+.oauth-notice .icon-btn {
+  flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1;
+}
+
 .sync-result.error {
   background: var(--error-soft);
   color: var(--error);
@@ -718,20 +736,23 @@ button {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--platform-imap);
+  /* --tag-color lets an account's custom color (set in Settings) override
+     the platform default. */
+  background: var(--tag-color, var(--platform-imap));
 }
 
 .platform-tag.gmail::before {
-  background: var(--platform-gmail);
+  background: var(--tag-color, var(--platform-gmail));
 }
 .platform-tag.outlook::before {
-  background: var(--platform-outlook);
+  background: var(--tag-color, var(--platform-outlook));
 }
 .platform-tag.qq::before {
-  background: var(--platform-qq);
+  background: var(--tag-color, var(--platform-qq));
 }
+.platform-tag.netease::before,
 .platform-tag.netease163::before {
-  background: var(--platform-netease163);
+  background: var(--tag-color, var(--platform-netease163));
 }
 
 .email-sender {

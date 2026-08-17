@@ -14,10 +14,11 @@ opt-in enhancement that activates only when client id/secret are configured.
 from __future__ import annotations
 
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -47,37 +48,74 @@ async def oauth_start(provider: str, platform: str | None = None) -> dict:
 @router.get("/callback/{provider}")
 async def oauth_callback(
     provider: str,
-    code: str,
     state: str,
-    request: Request,
+    code: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
+    """Finish the OAuth2 authorization-code flow.
+
+    Every outcome — success, provider error, duplicate callback — redirects
+    back to the frontend with a short status code the UI can localize, instead
+    of returning raw JSON errors that leave the user on a dead end.
+    """
+    accounts_url = settings.cors_origins[0].rstrip("/") + "/accounts"
+
+    # 1) Provider-side error (user denied consent, transient server error...).
+    if error:
+        return RedirectResponse(
+            url=f"{accounts_url}?oauth_error={quote(error)}"
+        )
+
+    # 2) The state is one-time use. If it is gone, the callback is either a
+    #    duplicate of one already handled, or the backend restarted mid-flow —
+    #    either way, bounce back so the user lands on a page instead of an
+    #    opaque "Invalid state" error.
     stored = _state_store.pop(state, None)
     if not stored or stored.get("provider") != provider:
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+        return RedirectResponse(url=f"{accounts_url}?oauth_status=stale")
+
+    if not code:
+        return RedirectResponse(url=f"{accounts_url}?oauth_error=no_code")
 
     try:
         tokens = await oauth.exchange_code_for_tokens(provider, code)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Token exchange failed: {exc}")
+        detail = quote(str(exc)[:200])
+        return RedirectResponse(
+            url=f"{accounts_url}?oauth_error=token_exchange_failed&oauth_detail={detail}"
+        )
 
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token")
     if not access_token or not refresh_token:
-        raise HTTPException(
-            status_code=400,
-            detail="No refresh_token returned. Re-consent is required (prompt=consent).",
-        )
+        return RedirectResponse(url=f"{accounts_url}?oauth_error=no_refresh_token")
 
-    # Resolve the mailbox address from the id token (best-effort).
+    # Best-effort mailbox address from the id token (used to label the account).
     user_email = _email_from_id_token(tokens.get("id_token")) or ""
 
     platform = stored["platform"]
     preset = PROVIDER_PRESETS.get(platform)
     if not preset:
-        raise HTTPException(status_code=400, detail=f"Unknown platform {platform}")
+        return RedirectResponse(url=f"{accounts_url}?oauth_error=unknown_platform")
 
     auth_type = AuthType.OAUTH_GOOGLE if provider == "google" else AuthType.OAUTH_MICROSOFT
+
+    # 3) Duplicate guard: the same mailbox is already connected (e.g. the user
+    #    ran OAuth twice). Don't create a second row — just go to the list.
+    existing = (
+        await db.execute(
+            select(EmailAccount).where(
+                EmailAccount.email == user_email,
+                EmailAccount.auth_type == auth_type,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return RedirectResponse(
+            url=f"{accounts_url}?oauth_status=exists&added={existing.id}"
+        )
 
     account = EmailAccount(
         platform=platform,
@@ -95,8 +133,7 @@ async def oauth_callback(
     await db.refresh(account)
 
     # Back to the frontend accounts page (carry the new account id for UX).
-    target = settings.cors_origins[0].rstrip("/") + f"/accounts?added={account.id}"
-    return RedirectResponse(url=target)
+    return RedirectResponse(url=f"{accounts_url}?added={account.id}")
 
 
 def _email_from_id_token(id_token: str | None) -> str:

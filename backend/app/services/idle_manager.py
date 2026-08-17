@@ -49,13 +49,14 @@ class IdleManager:
         if account is None:
             return False
         # Microsoft Graph accounts have no IMAP scope — polling only.
+        # The marker string is localized by the frontend (see idle.pollingOnly).
         if account.auth_type == "oauth_microsoft":
             self._status[account_id] = {
                 "running": False,
                 "last_event_at": None,
                 "events": 0,
                 "last_sync_count": 0,
-                "error": "Graph account — polling only",
+                "error": "polling_only",
             }
             return False
 

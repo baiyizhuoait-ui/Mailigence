@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api } from "../api";
 import { EmailDetailPanel } from "./EmailDetailPanel";
 import { useI18n } from "../i18n";
@@ -42,6 +42,16 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
   const [batchBusy, setBatchBusy] = useState(false);
   const [categories, setCategories] = useState<EmailCategory[]>([]);
   const offsetRef = useRef(0);
+
+  // account_id -> custom color (as configured in Settings). Lets the mailbox
+  // platform tag use the same color the user picked for each account.
+  const accountColorMap = useMemo(() => {
+    const map: Record<number, string> = {};
+    for (const a of accounts) {
+      if (a.color) map[a.id] = a.color;
+    }
+    return map;
+  }, [accounts]);
 
   // Dynamic category list — populated by the AI as it discovers new categories
   // and by the user via Settings → category management.
@@ -312,7 +322,14 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
                 {m.is_starred && <span className="email-star">★</span>}
                 <div className="email-row-main">
                   <div className="email-row-top">
-                    <span className={`platform-tag ${m.platform}`}>
+                    <span
+                      className={`platform-tag ${m.platform}`}
+                      style={
+                        accountColorMap[m.account_id]
+                          ? ({ "--tag-color": accountColorMap[m.account_id] } as CSSProperties)
+                          : undefined
+                      }
+                    >
                       {PLATFORM_LABEL[m.platform] ?? m.platform}
                     </span>
                     <span className="email-sender">{m.sender || m.sender_email || t("misc.unknownSender")}</span>

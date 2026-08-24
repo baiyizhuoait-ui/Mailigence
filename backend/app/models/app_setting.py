@@ -33,6 +33,9 @@ class AppSetting(Base):
     ai_base_url: Mapped[str] = mapped_column(String(255), default="")
     ai_model: Mapped[str] = mapped_column(String(120), default="")
 
+    # Semantic-search embedding model (optional; empty -> auto default or off).
+    ai_embedding_model: Mapped[str] = mapped_column(String(120), default="")
+
     # Fernet-encrypted API key. Empty -> use AI_API_KEY / ANTHROPIC_API_KEY from env.
     ai_api_key_encrypted: Mapped[str] = mapped_column(Text, default="")
 

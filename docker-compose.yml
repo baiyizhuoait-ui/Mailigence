@@ -1,11 +1,14 @@
-version: "3.9"
+name: mailigence
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector bundles the `vector` extension (semantic search);
+    # the plain postgres image does not include it.
+    image: pgvector/pgvector:pg16
     container_name: mailigence-postgres
     restart: unless-stopped
     environment:
+      # Must match backend/.env.example's database block.
       POSTGRES_USER: mailigence
       POSTGRES_PASSWORD: mailigence_dev_pw
       POSTGRES_DB: mailigence
@@ -13,6 +16,42 @@ services:
       - "5432:5432"
     volumes:
       - mailigence_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The backend only starts once the DB is ready to accept connections.
+      test: ["CMD-SHELL", "pg_isready -U mailigence -d mailigence"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  backend:
+    build: ./backend
+    container_name: mailigence-backend
+    restart: unless-stopped
+    # Environment variables (AI keys, modes, ...). Copy .env.docker.example
+    # to .env.docker first — see README "Docker 一键启动（跨平台推荐）".
+    env_file: .env.docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persists the auto-generated CREDENTIAL_ENCRYPTION_KEY across restarts
+      # (backend/entrypoint.sh writes it here on first start). Never delete
+      # this volume once mailboxes exist, or stored credentials become
+      # undecryptable.
+      - mailigence_backend_env:/app/env
+
+  frontend:
+    build: ./frontend
+    container_name: mailigence-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      # nginx listens on 80 inside; mapped to 5173 to match the dev URL.
+      - "5173:80"
 
 volumes:
   mailigence_pgdata:
+  mailigence_backend_env:

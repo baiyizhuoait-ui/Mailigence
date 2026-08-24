@@ -1,6 +1,7 @@
 """Async database engine and session factory (SQLAlchemy 2.0 + psycopg v3)."""
 from __future__ import annotations
 
+import logging
 from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
@@ -11,6 +12,8 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
+
+_log = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -57,6 +60,7 @@ async def init_db() -> None:
     # Import models so they register on Base.metadata before create_all.
     from app.models import (  # noqa: F401
         ai_memory,
+        ai_provider_profile,
         app_setting,
         blocked_sender,
         email,
@@ -90,6 +94,99 @@ async def init_db() -> None:
         await conn.exec_driver_sql(
             "ALTER TABLE email_accounts "
             "ADD COLUMN IF NOT EXISTS color VARCHAR(16)"
+        )
+        # Semantic-search embedding model config (optional, empty -> auto/off).
+        await conn.exec_driver_sql(
+            "ALTER TABLE app_settings "
+            "ADD COLUMN IF NOT EXISTS ai_embedding_model VARCHAR(120)"
+        )
+        # AI reply-draft cache (JSON drafts + invalidation hash + timestamp).
+        await conn.exec_driver_sql(
+            "ALTER TABLE unified_emails "
+            "ADD COLUMN IF NOT EXISTS cached_draft_replies JSONB"
+        )
+        await conn.exec_driver_sql(
+            "ALTER TABLE unified_emails "
+            "ADD COLUMN IF NOT EXISTS cached_at TIMESTAMP WITH TIME ZONE"
+        )
+        await conn.exec_driver_sql(
+            "ALTER TABLE unified_emails "
+            "ADD COLUMN IF NOT EXISTS draft_cache_hash VARCHAR(64)"
+        )
+        # pg_trgm extension + trigram GIN indexes power the similarity-based
+        # cross-mailbox search used by the AI chat QA endpoint.
+        await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_emails_subject_trgm "
+            "ON unified_emails USING gin (subject gin_trgm_ops)"
+        )
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_emails_snippet_trgm "
+            "ON unified_emails USING gin (body_snippet gin_trgm_ops)"
+        )
+        # Full-text search: a generated tsvector over subject + body snippet,
+        # maintained by PostgreSQL (english config boosts Latin-script ranking;
+        # CJK queries are covered by the trigram indexes above).
+        await conn.exec_driver_sql(
+            "ALTER TABLE unified_emails "
+            "ADD COLUMN IF NOT EXISTS search_vector tsvector "
+            "GENERATED ALWAYS AS ("
+            "to_tsvector('english', coalesce(subject,'') || ' ' || coalesce(body_snippet,''))"
+            ") STORED"
+        )
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_emails_search_vector "
+            "ON unified_emails USING gin (search_vector)"
+        )
+        # Semantic search: pgvector extension + embedding column (dimension must
+        # match the configured embedding model — default text-embedding-3-small
+        # is 1536; for a different model (e.g. nomic-embed-text = 768 via
+        # Ollama) set EMBEDDING_DIM and drop/recreate the column once).
+        # The bundled portable PostgreSQL may not ship pgvector — in that case
+        # degrade gracefully (semantic search auto-disables, keyword search
+        # keeps working) instead of failing startup. A savepoint isolates the
+        # failure so the remaining migrations / seeds still run.
+        try:
+            async with conn.begin_nested():
+                await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
+                await conn.exec_driver_sql(
+                    f"ALTER TABLE unified_emails "
+                    f"ADD COLUMN IF NOT EXISTS embedding vector({settings.embedding_dim})"
+                )
+                await conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS idx_emails_embedding "
+                    "ON unified_emails USING ivfflat (embedding vector_cosine_ops) "
+                    "WITH (lists = 100)"
+                )
+        except Exception as exc:
+            _log.warning(
+                "pgvector not available — semantic search disabled (%s). "
+                "Install the pgvector extension to enable it.",
+                exc,
+            )
+        # Migrate the legacy single AI config (AppSetting row) into the new
+        # ai_provider_profiles table as its first (active) record, so existing
+        # setups keep working unchanged. No-op once profiles exist.
+        await conn.exec_driver_sql(
+            """
+            INSERT INTO ai_provider_profiles
+                (label, provider_type, base_url, api_key_encrypted, model,
+                 is_active, created_at, updated_at)
+            SELECT
+                CASE WHEN app_settings.ai_provider = 'anthropic'
+                     THEN 'Anthropic Claude' ELSE '我的 AI Provider' END,
+                CASE WHEN app_settings.ai_provider = 'anthropic'
+                     THEN 'anthropic' ELSE 'openai_compatible' END,
+                app_settings.ai_base_url, app_settings.ai_api_key_encrypted,
+                app_settings.ai_model, TRUE,
+                COALESCE(app_settings.updated_at, NOW()),
+                COALESCE(app_settings.updated_at, NOW())
+            FROM app_settings
+            WHERE NOT EXISTS (SELECT 1 FROM ai_provider_profiles)
+              AND (app_settings.ai_base_url <> ''
+                   OR app_settings.ai_model <> ''
+                   OR app_settings.ai_api_key_encrypted <> '')
+            """
         )
         await _seed_categories(conn)
 

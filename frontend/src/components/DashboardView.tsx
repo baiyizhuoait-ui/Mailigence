@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { ChatPanel } from "./ChatPanel";
 import { EmailDetailPanel } from "./EmailDetailPanel";
 import { useI18n } from "../i18n";
 import {
@@ -36,6 +37,7 @@ export function DashboardView() {
   const [lastMailAt, setLastMailAt] = useState<string | null>(null);
   const [handlingIds, setHandlingIds] = useState<Set<number>>(new Set());
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
+  const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
   const scheduleTimer = useRef<ReturnType<typeof setInterval> | undefined>();
 
   const fullRefresh = useCallback(async () => {
@@ -87,6 +89,12 @@ export function DashboardView() {
 
   useEffect(() => {
     fullRefresh();
+    api
+      .getAiSettings()
+      .then((s) =>
+        setAiAvailable(s.api_key_configured && s.analysis_mode !== "rules_only"),
+      )
+      .catch(() => setAiAvailable(false));
   }, [fullRefresh]);
 
   useEffect(() => {
@@ -328,6 +336,9 @@ export function DashboardView() {
           </div>
         </div>
       </div>
+
+      {/* AI cross-mailbox chat — visible only when AI is configured */}
+      {aiAvailable && <ChatPanel onOpenEmail={setSelectedEmailId} />}
 
       {/* Email reader — opens when a priority-queue item is clicked */}
       {selectedEmailId !== null && (

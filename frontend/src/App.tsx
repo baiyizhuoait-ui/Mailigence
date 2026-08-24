@@ -8,11 +8,13 @@ import { ImportDialog } from "./components/ImportDialog";
 import { MailboxView } from "./components/MailboxView";
 import { ReplyTrackingView } from "./components/ReplyTrackingView";
 import { ReportView } from "./components/ReportView";
+import { SearchBar } from "./components/SearchBar";
+import { SearchResults } from "./components/SearchResults";
 import { SettingsView } from "./components/SettingsView";
 import { useI18n } from "./i18n";
 import { PLATFORM_LABEL, type EmailAccount } from "./types";
 
-type View = "dashboard" | "mailbox" | "accounts" | "ads" | "reports" | "replies" | "settings";
+type View = "dashboard" | "mailbox" | "accounts" | "ads" | "reports" | "replies" | "settings" | "search";
 
 export default function App() {
   const { t } = useI18n();
@@ -28,6 +30,9 @@ export default function App() {
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   /** One-time OAuth callback result banner (success / error / duplicate). */
   const [oauthNotice, setOauthNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  /** Full-text search page state (query + optional email to open on arrival). */
+  const [searchQ, setSearchQ] = useState("");
+  const [searchEmailId, setSearchEmailId] = useState<number | null>(null);
 
   const refreshAccounts = useCallback(async () => {
     setLoadingAccounts(true);
@@ -98,6 +103,7 @@ export default function App() {
     reports: t("title.reports"),
     replies: t("title.replies"),
     settings: t("title.settings"),
+    search: t("title.search"),
   };
 
   const subs: Record<View, string> = {
@@ -108,6 +114,7 @@ export default function App() {
     reports: t("sub.reports"),
     replies: t("sub.replies"),
     settings: t("sub.settings"),
+    search: t("sub.search"),
   };
 
   return (
@@ -157,14 +164,23 @@ export default function App() {
             <h1 className="page-title">{titles[view]}</h1>
             <p className="page-sub">{subs[view]}</p>
           </div>
-          {view !== "dashboard" && view !== "ads" && view !== "reports" && view !== "replies" && view !== "settings" && (
+          <SearchBar
+            onOpenResults={(q, emailId) => {
+              setSearchQ(q);
+              setSearchEmailId(emailId ?? null);
+              setView("search");
+            }}
+          />
+          {view !== "dashboard" && view !== "ads" && view !== "reports" && view !== "replies" && view !== "settings" && view !== "search" && (
             <button className="btn primary" onClick={() => setShowAdd(true)}>
               {t("action.addAccount")}
             </button>
           )}
         </header>
 
-        {view === "dashboard" ? (
+        {view === "search" ? (
+          <SearchResults accounts={accounts} initialQ={searchQ} openEmailId={searchEmailId} />
+        ) : view === "dashboard" ? (
           loadingAccounts ? (
             <div className="loading">{t("misc.loading")}</div>
           ) : (

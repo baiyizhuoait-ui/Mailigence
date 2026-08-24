@@ -19,6 +19,13 @@ Mailigence 是一个自托管的邮件聚合与 AI 分析工具。将 Gmail / Ou
 - **AI 记忆系统** — 在设置页的聊天框直接告诉 AI 你的偏好（如"亚马逊促销都当广告处理"、"老板的邮件置顶"），AI 会提炼成记忆并应用到所有后续分析，越用越懂你
 - **动态类别** — 无需手动预设，AI 会自动发现邮件中出现的新类别并创建；也可手动添加 / 重命名 / 删除类别，删除后该类别的邮件自动重新排队分类
 - **日程提取** — 从邮件正文中识别会议、截止、预约等安排，理解"明天 / 下周一 / 15:00"等自然语言表达，按 今天 / 明天 / 本周 / 即将到来 分组展示
+- **AI 配置管理** — 可同时保存多套 Provider 配置（云端 / 本地并存，如 DeepSeek、本地 Ollama、LM Studio），一键切换「当前使用」，模型列表自动探测
+- **AI 回复草稿** — 读信时一键生成 1-2 个可编辑的回复草稿，复制正文或跳转原邮箱粘贴发送
+- **AI 邮件问答** — 跨全部邮箱用自然语言提问（如"学校最近有什么活动？"），基于检索到的邮件片段作答并附引用邮件卡片，点击直达详情
+
+### 🔍 搜索
+- **全文检索** — 顶栏全局搜索框（任意页面可用），300ms 防抖实时预览，独立结果页支持账户 / 类别 / 日期筛选，命中摘要高亮（`<mark>`）
+- **语义检索（可选）** — 配置 embedding 模型后自动启用向量召回，解决"主题相关但字面不重叠 / 跨语言"的检索短板；三路召回（关键词 + 向量 + 结构化过滤）用 RRF 融合排序
 
 ### 📬 阅读与处理
 - **多账户聚合** — 一个界面管理所有邮箱账户（Gmail / Outlook / QQ / 163 / 任意 IMAP），支持应用专用密码与 OAuth2；导入历史邮件时保留原始已读状态
@@ -46,13 +53,53 @@ Mailigence 是一个自托管的邮件聚合与 AI 分析工具。将 Gmail / Ou
 | 前端 | React 18 · TypeScript · Vite |
 | 数据库 | PostgreSQL 14+ |
 | 邮件 | IMAP (imaplib) · IMAP IDLE |
-| AI | OpenAI 兼容 API / Anthropic / Ollama（可切换） |
+| AI | OpenAI 兼容 / Anthropic / 任意本地推理服务（Ollama · LM Studio · vLLM · llama.cpp）· 多配置并存一键切换 |
 
 ## 🚀 快速开始
 
-### Windows 一键启动（推荐）
+本仓库提供两条互不干扰的启动方式，任选其一：
 
-环境要求：**Python 3.11+**、**Node.js 18+**（安装时勾选加入 PATH）
+| 方式 | 适用 | 命令 / 操作 |
+|---|---|---|
+| **跨平台 Docker 一键启动**（推荐） | macOS / Linux / Windows（需 Docker） | `docker compose up -d` |
+| **Windows 免 Docker 一键启动** | Windows（无需 Docker） | 双击 `start.bat` |
+
+### Docker 一键启动（跨平台推荐）
+
+环境要求：**Docker 24+**（自带 compose 插件）。
+
+无需安装 Python / Node.js / PostgreSQL，一条命令拉起全部三个服务（数据库 + 后端 + 前端）：
+
+```bash
+# 1. 克隆仓库
+git clone <仓库地址> && cd Mailigence
+
+# 2. 准备环境变量（AI Key、OAuth 等按需填写；留空也能以纯规则模式运行）
+cp .env.docker.example .env.docker
+
+# 3. 一键启动（首次会构建镜像，稍等片刻）
+docker compose up -d
+```
+
+启动后访问：
+
+- 前端：**http://localhost:5173**
+- 后端 API：http://localhost:8000（健康检查 http://localhost:8000/api/health）
+- 数据库：localhost:5432（`mailigence` / `mailigence_dev_pw` / `mailigence`）
+
+说明：
+
+- **自动建表**：后端容器启动时自动创建全部数据表、内置分类并执行增量迁移，无需手动执行 SQL。
+- **加密密钥**：若 `CREDENTIAL_ENCRYPTION_KEY` 留空，后端容器会在**首次启动**时自动生成并持久化到数据卷，之后重启不会重新生成（否则已加密的邮箱凭据会全部失效）。
+- **数据持久化**：PostgreSQL 数据与加密密钥分别存于命名卷 `mailigence_pgdata`、`mailigence_backend_env`。
+- 查看日志：`docker compose logs -f backend`
+- 停止（保留数据）：`docker compose down`
+- 彻底清空（删库，慎用）：`docker compose down -v`
+- 若之前运行过旧版（仅数据库）的 docker-compose，请先 `docker compose down` 再启动新版，避免容器名冲突。
+
+### Windows 免 Docker 一键启动（start.bat / start.ps1）
+
+无需 Docker，环境要求：**Python 3.11+**、**Node.js 18+**（安装时勾选加入 PATH）
 
 1. 双击项目根目录的 `start.bat`（或运行 `.\start.ps1`）
 2. 首次运行脚本会自动完成以下全部步骤：
@@ -130,47 +177,114 @@ AI_PROVIDER=openai
 AI_API_KEY=
 AI_BASE_URL=https://api.deepseek.com/v1     # 以 DeepSeek 为例
 AI_MODEL=deepseek-chat
+
+# ---- 语义搜索（可选，未配置则检索退化为纯关键词） ----
+AI_EMBEDDING_MODEL=          # 留空自动用 text-embedding-3-small（需 PostgreSQL 装 pgvector）
+EMBEDDING_DIM=1536           # 与所选 embedding 模型维度一致（nomic-embed-text=768）
 ```
 
-## 🤖 AI 接入方式
+## 🤖 AI 配置管理（多配置并存）
 
-设置页（设置 → AI 邮件分析）内置了主流接入方式，选择后自动填充地址：
+设置页 →「设置 → AI 邮件分析」→「AI 配置管理」：可以把**云端与本地多套 Provider 同时保存**下来，随时切换，互不覆盖。
 
-| 接入方式 | Base URL 示例 | 模型示例 | 说明 |
-|---|---|---|---|
-| OpenAI 官方 | `https://api.openai.com/v1` | `gpt-4o-mini` | 效果最好，需海外支付 |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | 国内直连，性价比高 |
-| Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` | 国内直连 |
-| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 阿里云，国内直连 |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 国内直连，有免费额度 |
-| Ollama 本地 | `http://localhost:11434/v1` | `qwen2.5:7b` | 免费、离线、隐私 |
-| Anthropic Claude | `https://api.anthropic.com/v1` | `claude-sonnet-4-...` | 海外 |
+### 基本流程
 
-**三种分析模式：**
+1. **新建配置**：点击「新建配置」，填写：
+   - **名称**：任意自定义，如 `DeepSeek 云端` / `本地 Ollama` / `本地 LM Studio`
+   - **类型**：`OpenAI 兼容`（OpenAI / DeepSeek / Kimi / 通义 / GLM / **Ollama / LM Studio / vLLM / llama.cpp / oneAPI** 等全部走此类型）｜ `Anthropic` ｜ `规则模式（无 AI）`
+   - **接口地址（Base URL）**：自由文本，如 `https://api.deepseek.com/v1` 或 `http://localhost:11434/v1`
+   - **模型名称**：可手动输入；也可点「**探测模型列表**」自动从 `{Base URL}/models` 拉取候选（点击填入，仍可手改；探测失败不影响手动输入）
+   - **API 密钥**：云端必填；本地无需鉴权的服务（Ollama / LM Studio）可**留空**
+2. **保存**：第一个配置自动成为「当前使用」；之后新建的配置需点卡片上的「**切换为当前使用**」激活
+3. **测试连接**：卡片上的「测试连接」请求 `{Base URL}/models` 验证连通性（任意类型都支持）
+4. **编辑 / 删除**：随时修改连接信息；删除当前生效配置后自动切换到剩余配置中的第一个
+5. 新建时切换类型，表单会自动带出**该类型上次填写**的 Base URL / 模型，无需重输
+
+> 说明：Base URL 与模型名**不做任何下拉限定**，探测只是辅助手段——接口不支持探测或探测失败时，直接手动输入即可保存使用。
+
+### 三种分析模式（全局）
 
 - **智能模式（推荐）**：配置了 AI 就用 AI，失败或未配置时自动回退到规则
 - **纯 AI 模式**：始终调用 AI
 - **纯规则模式**：不调用 AI，纯程序分析（关键词/头规则），零成本零依赖
 
-> 在设置页保存的 API 密钥会**加密**存储于数据库；也可以选择不填密钥，改用 `.env` 中的 `AI_API_KEY`。修改设置后分析缓存自动失效。
+> 保存的 API 密钥会**加密**存储于数据库；编辑时密钥留空则保留原密钥。修改配置后分析缓存自动失效。
+
+### 常见云端接入参考
+
+| Provider | Base URL | 模型示例 |
+|---|---|---|
+| OpenAI 官方 | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
+| Anthropic Claude | `https://api.anthropic.com/v1` | `claude-sonnet-4-...` |
+
+### 本地 Ollama 配置教程（免费、离线、隐私）
+
+1. **安装 Ollama**：到官网 https://ollama.com/ 下载对应系统安装包（Windows 双击安装 / macOS 拖动安装 / Linux 执行 `curl -fsSL https://ollama.com/install.sh | sh`）
+2. **拉取一个模型**（邮箱分析用中档模型即可，例如）：
+
+   ```bash
+   ollama pull qwen2.5:7b
+   ollama list          # 查看已安装模型
+   ```
+
+3. **确认服务已启动**：Ollama 默认监听 `http://localhost:11434`，其 **OpenAI 兼容端点**是 `http://localhost:11434/v1`。浏览器直接打开 `http://localhost:11434/v1/models` 能返回 JSON 即说明可用
+4. **在 Mailigence 里新建配置**：
+   - 名称：`本地 Ollama`
+   - 类型：**OpenAI 兼容**
+   - 接口地址：`http://localhost:11434/v1`
+   - 模型：`qwen2.5:7b`（或点「探测模型列表」自动带出）
+   - API 密钥：**留空**（本地无需鉴权）
+5. **保存 →「切换为当前使用」**：之后分类 / 优先级 / 日程提取 / 回复草稿 / 聊天问答全部走本地模型，断网也可用。
+
+> **语义搜索也用本地模型（可选）**：Ollama 同样提供 OpenAI 兼容的 `/v1/embeddings` 接口。拉取 `ollama pull nomic-embed-text`，在「语义搜索模型（可选）」填 `nomic-embed-text` 即可。注意该模型向量维度为 **768**（默认 text-embedding-3-small 为 1536）：若数据库是全新初始化，先在 `backend/.env` 设 `EMBEDDING_DIM=768` 再启动；若已初始化过，需删除 embedding 列后重启（向量会自动重新生成）。
+
+> **其他本地推理服务同理**：LM Studio（地址 `http://localhost:1234/v1`）、vLLM / llama.cpp server / oneAPI 等只要实现了 OpenAI 兼容 `/v1` 接口，用同一套「OpenAI 兼容」配置即可，无需任何工具专属设置。
+
+### 本地小模型 / 思考型模型适配
+
+**现象**：用本地小模型（尤其思考型模型，如 qwen3 系列）时，生成回复草稿 / 聊天问答极慢（几十秒到数分钟），或提示"AI 返回的回复草稿无法解析"、输出为空。
+
+**根因**：思考型模型经 OpenAI 兼容 `/v1/chat/completions` 接口调用时，会先输出一大段"思维链（reasoning）"，直接耗尽 `max_tokens` 预算——正文根本没来得及输出（`content` 为空），或 JSON 被截断，于是解析失败；时间也全耗在思考上。
+
+**系统自动处理**：
+
+- 检测到本地 Ollama（端口 11434）时，自动改走其**原生 `/api/chat` 接口并传 `think: false` 关闭思考**（实测 46 秒 → 3.5 秒）
+- 同时上调了 token 预算（草稿 / 问答 2048）与超时（120 秒），并简化提示词
+- 提供 JSON 容错解析：自动修复尾逗号、字符串内裸换行，并兼容单条对象包装等输出形状
+
+**若仍慢 / 仍失败，请按顺序排查**：
+
+1. `ollama list` 核对设置中的模型名是否**完全一致**（大小写与 `:tag`，如 `qwen3:8b`，不能只写 `qwen3`）
+2. 确认 Ollama 服务已启动（浏览器打开 `http://localhost:11434/v1/models` 能返回 JSON）
+3. 换**上下文更大**的模型（如 `qwen2.5:14b` / `qwen3:14b`），`ollama show <模型>` 可查看上下文长度
+4. 查看后端日志中 `LLM HTTP ...` 报错后的提示文字，会区分"输入过长"与"模型名无效"两类原因
 
 ## 📁 项目结构
 
 ```
 mailigence/
-├── start.bat / start.ps1      # Windows 一键启动（自动初始化数据库与依赖）
+├── start.bat / start.ps1      # Windows 免 Docker 一键启动（自动初始化数据库与依赖）
 ├── stop.bat / stop.ps1        # 一键停止（stop.ps1 -StopDb 连数据库一起停）
-├── docker-compose.yml         # 可选：仅启动 PostgreSQL 容器
+├── docker-compose.yml         # 跨平台 Docker 一键启动：postgres + backend + frontend
+├── .env.docker.example        # Docker 部署的环境变量模板（cp 为 .env.docker 使用）
 ├── backend/
 │   ├── app/
 │   │   ├── api/          # FastAPI 路由（accounts/dashboard/settings/reports…）
 │   │   ├── models/       # SQLAlchemy 模型
 │   │   ├── schemas/      # Pydantic 模型
 │   │   └── services/     # 邮件同步、AI 分析、IMAP IDLE、加密…
-│   ├── run.py            # Windows 兼容启动脚本（推荐）
-│   ├── .env.example      # 环境变量模板
+│   ├── Dockerfile        # 后端镜像（python:3.11-slim，psycopg[binary] 免编译）
+│   ├── entrypoint.sh     # 容器启动脚本（首次自动生成并持久化加密密钥）
+│   ├── run.py            # 本地启动脚本（Windows 兼容）
+│   ├── .env.example      # 环境变量模板（本地开发）
 │   └── requirements.txt
 ├── frontend/
+│   ├── Dockerfile        # 多阶段构建（node 构建 → nginx 托管静态文件）
+│   ├── nginx.conf        # SPA 路由 fallback + /api 反向代理到 backend
 │   ├── src/
 │   │   ├── components/   # React 组件
 │   │   ├── api.ts        # 后端 API 封装
@@ -191,7 +305,13 @@ mailigence/
 
 **没有 AI 密钥能用吗？** 可以。选择「纯规则模式」或用默认的智能模式（未配置 AI 时自动用规则），所有功能（分类/优先级/日程提取）都有规则版兜底实现。
 
-**Ollama 怎么用？** 安装 [Ollama](https://ollama.com/) → `ollama pull qwen2.5:7b` → 在设置页选择「Ollama 本地模型」即可。
+**Ollama 怎么用？** 完整教程见上方「[本地 Ollama 配置教程](#本地-ollama-配置教程免费离线隐私)」：安装 Ollama → `ollama pull qwen2.5:7b` → 设置页「AI 配置管理」新建「OpenAI 兼容」配置，接口地址填 `http://localhost:11434/v1`，密钥留空，保存后切换为当前使用即可。
+
+**本地模型生成很慢 / 提示草稿无法解析？** 见上方「本地小模型 / 思考型模型适配」：思考型模型（如 qwen3）会把 token 预算全耗在思维链上，系统已对 Ollama 自动关闭思考并加大预算 / 超时；若仍失败，用 `ollama list` 核对模型名（大小写与 `:tag`），或换上下文更大的模型。
+
+**语义搜索（向量检索）为什么不可用？** 需要 PostgreSQL 安装 **pgvector** 扩展。Docker 部署已内置（`pgvector/pgvector:pg16` 镜像）；本机便携版需自行安装 pgvector，否则启动日志会提示 `pgvector not available — semantic search disabled`，检索自动退化为纯关键词（聊天问答会在 system prompt 里如实说明"当前使用关键词检索"），不影响其他功能。
+
+**搜索不到语义相关但没字面关键词的邮件？** 该场景正是「语义检索」要解决的：配置好 embedding 模型（见上方语义搜索说明）并确保 pgvector 可用后，检索会自动升级为"关键词 + 向量"双路召回。
 
 **端口冲突？** 后端默认 8000、前端 5173，可在 `.env` 的 `APP_PORT` 和 `vite.config.ts` 中修改。
 
@@ -201,7 +321,7 @@ mailigence/
 
 **如何迁移/备份数据？** 便携版数据目录在 `\.pginstall\pgdata`，直接复制该目录即可整体迁移；或用 `pg_dump` 导出。
 
-**macOS/Linux 怎么跑？** 手动方式见上方「手动启动」；也可以使用根目录的 `docker-compose.yml` 只启动数据库（`docker compose up -d postgres`）。
+**macOS/Linux 怎么跑？** 手动方式见上方「手动启动」；**推荐**使用根目录的 `docker compose up -d` 一键启动全部服务（见「Docker 一键启动（跨平台推荐）」）。
 
 ## 🔒 安全说明
 

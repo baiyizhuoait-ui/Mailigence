@@ -165,9 +165,9 @@ async def _analyze_with_llm(
     system_prompt = _build_system_prompt(categories, memories)
 
     if cfg.provider == "anthropic":
-        content = await _anthropic_chat(cfg, user_content, system_prompt)
+        content = await _anthropic_chat(cfg, user_content, system_prompt, max_tokens=1024, timeout=90)
     else:
-        content = await _openai_chat(cfg, user_content, system_prompt)
+        content = await _openai_chat(cfg, user_content, system_prompt, max_tokens=1024, timeout=90)
 
     parsed = json.loads(content)
     return AnalysisResult(
@@ -179,8 +179,106 @@ async def _analyze_with_llm(
     )
 
 
-async def _openai_chat(cfg: AiConfig, user_content: str, system_prompt: str) -> str:
-    """OpenAI-compatible chat completions (OpenAI / DeepSeek / Kimi / Ollama ...)."""
+def _llm_error_hint(text: str) -> str:
+    """Append an actionable Chinese hint when the provider rejects a request.
+
+    Two distinct failure classes get distinct hints:
+    1. Input too long / context overflow — common on local small-context models
+       (the draft path retries with a truncated body automatically).
+    2. The configured model name doesn't match an available model.
+    """
+    low = (text or "").lower()
+    if any(k in low for k in ("context", "num_predict", "max length", "too long", "exceeds", "token")):
+        return (
+            "（提示：输入过长——本地/小上下文模型放不下整封邮件，已自动尝试截断重试。"
+            "若仍失败，请换用上下文更大的模型，或换一封较短的邮件）"
+        )
+    if any(
+        k in low
+        for k in (
+            "invalid model",
+            "model not found",
+            "model does not exist",
+            "model not exist",
+            "unknown model",
+            "model_error",
+        )
+    ):
+        return (
+            "（提示：模型名称无效——请确认设置中填写的模型名与本地/云端实际可用的模型完全一致，"
+            "注意大小写与 :tag 标签，如 qwen2.5:7b；本地模型请先确认已用 ollama pull 拉取）"
+        )
+    return ""
+
+
+def _is_ollama(base_url: str) -> bool:
+    """Best-effort detection of a local Ollama server.
+
+    Ollama's OpenAI-compatible endpoint ignores ``think`` and lets thinking
+    models (qwen3 & co.) burn the whole token budget + minutes on reasoning
+    before answering. Its native ``/api/chat`` honours ``think: false``, which
+    is dramatically faster, so we route Ollama calls through that endpoint.
+    """
+    url = (base_url or "").lower()
+    return "11434" in url or "ollama" in url
+
+
+async def _ollama_chat(
+    cfg: AiConfig,
+    user_content: str,
+    system_prompt: str,
+    max_tokens: int,
+    json_mode: bool,
+    timeout: float,
+) -> str:
+    """Native Ollama /api/chat with thinking disabled (fast path)."""
+    body: dict = {
+        "model": cfg.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "stream": False,
+        # Disable reasoning for thinking models — otherwise they spend the
+        # whole budget (and minutes) thinking before answering.
+        "think": False,
+        "options": {"temperature": 0, "num_predict": max_tokens},
+    }
+    if json_mode:
+        body["format"] = "json"
+    base = cfg.base_url.rstrip("/")
+    url = base.removesuffix("/v1") + "/api/chat"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(url, headers={"Content-Type": "application/json"}, json=body)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"LLM HTTP {resp.status_code}: {resp.text[:200]}{_llm_error_hint(resp.text)}"
+            )
+        data = resp.json()
+    return data["message"]["content"]
+
+
+async def _openai_chat(
+    cfg: AiConfig,
+    user_content: str,
+    system_prompt: str,
+    max_tokens: int = 300,
+    json_mode: bool = True,
+    timeout: float = 30,
+) -> str:
+    """OpenAI-compatible chat completions (OpenAI / DeepSeek / Kimi / Ollama ...).
+
+    Ollama is routed through its native ``/api/chat`` with thinking disabled
+    (see ``_ollama_chat``). ``json_mode`` forces a JSON answer; set it to
+    ``False`` for calls that must emit free-form prose (e.g. the chat QA
+    answer with its ``---CITED_IDS---`` trailing marker). ``timeout`` should be
+    raised for long outputs / slow local models.
+    """
+    if _is_ollama(cfg.base_url):
+        return await _ollama_chat(
+            cfg, user_content, system_prompt, max_tokens=max_tokens, json_mode=json_mode, timeout=timeout
+        )
+
     headers = {
         "Authorization": f"Bearer {cfg.api_key}",
         "Content-Type": "application/json",
@@ -191,20 +289,25 @@ async def _openai_chat(cfg: AiConfig, user_content: str, system_prompt: str) -> 
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        "response_format": {"type": "json_object"},
         "temperature": 0,
-        "max_tokens": 300,
+        "max_tokens": max_tokens,
     }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     url = cfg.base_url.rstrip("/") + "/chat/completions"
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, headers=headers, json=body)
         if resp.status_code != 200:
-            raise RuntimeError(f"LLM HTTP {resp.status_code}: {resp.text[:200]}")
+            raise RuntimeError(
+                f"LLM HTTP {resp.status_code}: {resp.text[:200]}{_llm_error_hint(resp.text)}"
+            )
         data = resp.json()
     return data["choices"][0]["message"]["content"]
 
 
-async def _anthropic_chat(cfg: AiConfig, user_content: str, system_prompt: str) -> str:
+async def _anthropic_chat(
+    cfg: AiConfig, user_content: str, system_prompt: str, max_tokens: int = 400, timeout: float = 30
+) -> str:
     """Anthropic Messages API (provider=anthropic)."""
     headers = {
         "x-api-key": cfg.api_key,
@@ -213,16 +316,18 @@ async def _anthropic_chat(cfg: AiConfig, user_content: str, system_prompt: str) 
     }
     body = {
         "model": cfg.model,
-        "max_tokens": 400,
+        "max_tokens": max_tokens,
         "temperature": 0,
         "messages": [{"role": "user", "content": user_content}],
         "system": system_prompt,
     }
     url = cfg.base_url.rstrip("/") + "/messages"
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, headers=headers, json=body)
         if resp.status_code != 200:
-            raise RuntimeError(f"Anthropic HTTP {resp.status_code}: {resp.text[:200]}")
+            raise RuntimeError(
+                f"Anthropic HTTP {resp.status_code}: {resp.text[:200]}{_llm_error_hint(resp.text)}"
+            )
         data = resp.json()
     return "".join(block.get("text", "") for block in data.get("content", []))
 

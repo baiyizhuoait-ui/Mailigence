@@ -97,6 +97,13 @@ class UnifiedEmail(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
 
+    # ---- AI reply drafts (populated on demand via /draft-replies) ----
+    # JSON list of {style, body}; cached until the email content or the user's
+    # AI memory changes (draft_cache_hash covers both inputs).
+    cached_draft_replies: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    cached_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    draft_cache_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

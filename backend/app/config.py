@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     ai_base_url: str = ""
     ai_model: str = ""
     anthropic_api_key: str = ""
+    # Semantic-search embedding model (openai-compatible embeddings endpoint).
+    # Empty -> auto default (text-embedding-3-small for OpenAI-compatible /
+    # Ollama; embedding disabled for anthropic, which has no embeddings API).
+    ai_embedding_model: str = ""
+    # pgvector column dimension — must match the embedding model in use
+    # (text-embedding-3-small = 1536; nomic-embed-text via Ollama = 768).
+    embedding_dim: int = 1536
 
     # OAuth2 providers
     google_oauth_client_id: str = ""
@@ -53,6 +60,12 @@ class Settings(BaseSettings):
     microsoft_oauth_client_id: str = ""
     microsoft_oauth_client_secret: str = ""
     public_base_url: str = "http://localhost:8000"
+
+    # Full-text search ranking weights (sum = 1.0). Tune via env:
+    # SEARCH_RELEVANCE_WEIGHT / SEARCH_PRIORITY_WEIGHT / SEARCH_RECENCY_WEIGHT
+    search_relevance_weight: float = 0.6
+    search_priority_weight: float = 0.2
+    search_recency_weight: float = 0.2
 
     @field_validator("cors_origins", mode="before")
     @classmethod

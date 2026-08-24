@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import {
   ACCENT_PRESETS,
@@ -9,11 +9,12 @@ import {
 } from "../i18n";
 import type {
   AiMemory,
-  AiProvider,
   AiSettings,
   AnalysisMode,
   EmailAccount,
   EmailCategory,
+  ProviderProfile,
+  ProviderType,
 } from "../types";
 
 // Preset swatches for category / account colors.
@@ -22,24 +23,11 @@ const COLOR_PRESETS = [
   "#e0725f", "#ec4899", "#a073d4", "#6366f1", "#06b6d4", "#64748b", "#9ca3af",
 ];
 
-interface AiPreset {
-  id: string;
-  provider: AiProvider;
-  baseUrl: string;
-  model: string;
-}
-
-const AI_PRESETS: AiPreset[] = [
-  { id: "env", provider: "", baseUrl: "", model: "" },
-  { id: "openai", provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  { id: "deepseek", provider: "openai", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-  { id: "moonshot", provider: "openai", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
-  { id: "qwen", provider: "openai", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
-  { id: "glm", provider: "openai", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash" },
-  { id: "ollama", provider: "openai", baseUrl: "http://localhost:11434/v1", model: "qwen2.5:7b" },
-  { id: "anthropic", provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", model: "claude-sonnet-4-20250514" },
-  { id: "custom", provider: "openai", baseUrl: "", model: "" },
-];
+const PROVIDER_TYPE_KEYS: Record<ProviderType, string> = {
+  openai_compatible: "settings.profileType.openai_compatible",
+  anthropic: "settings.profileType.anthropic",
+  rules_only: "settings.profileType.rules_only",
+};
 
 const MODE_KEYS: { mode: AnalysisMode; labelKey: string; descKey: string }[] = [
   { mode: "auto", labelKey: "settings.ai.mode.auto", descKey: "settings.ai.mode.autoDesc" },
@@ -53,15 +41,30 @@ export function SettingsView() {
 
   // ---- AI settings state ----
   const [mode, setMode] = useState<AnalysisMode>("auto");
-  const [provider, setProvider] = useState<AiProvider>("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [clearKey, setClearKey] = useState(false);
-  const [presetId, setPresetId] = useState("env");
+  const [embeddingModel, setEmbeddingModel] = useState("");
   const [status, setStatus] = useState<AiSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // ---- AI provider profiles (multi-config) ----
+  const [profiles, setProfiles] = useState<ProviderProfile[]>([]);
+  const [formOpen, setFormOpen] = useState(false);
+  const [formProfileId, setFormProfileId] = useState<number | null>(null);
+  const [formLabel, setFormLabel] = useState("");
+  const [formType, setFormType] = useState<ProviderType>("openai_compatible");
+  const [formBaseUrl, setFormBaseUrl] = useState("");
+  const [formModel, setFormModel] = useState("");
+  const [formApiKey, setFormApiKey] = useState("");
+  const [formBusy, setFormBusy] = useState(false);
+  const [formMsg, setFormMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [probeModels, setProbeModels] = useState<string[] | null>(null);
+  const [probeLoading, setProbeLoading] = useState(false);
+  const [probeErr, setProbeErr] = useState("");
+  const [testBusy, setTestBusy] = useState<number | null>(null);
+  const [testMsg, setTestMsg] = useState<{ id: number; ok: boolean; text: string } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState<number | null>(null);
+  // Last-used base_url/model per provider_type — auto-fill when switching type.
+  const lastByType = useRef<Partial<Record<ProviderType, { baseUrl: string; model: string }>>>({});
 
   // ---- category management state ----
   const [categories, setCategories] = useState<EmailCategory[]>([]);
@@ -100,12 +103,7 @@ export function SettingsView() {
       const s = await api.getAiSettings();
       setStatus(s);
       setMode(s.analysis_mode);
-      setProvider(s.provider);
-      setBaseUrl(s.base_url);
-      setModel(s.model);
-      // Match the current base URL to a preset, else custom.
-      const match = AI_PRESETS.find((p) => p.baseUrl === s.base_url && p.provider === s.provider);
-      setPresetId(match ? match.id : "custom");
+      setEmbeddingModel(s.embedding_model);
     } catch {
       /* ignore */
     }
@@ -114,6 +112,19 @@ export function SettingsView() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  // ---- provider profiles ----
+  const loadProfiles = useCallback(async () => {
+    try {
+      setProfiles(await api.listProviderProfiles());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProfiles();
+  }, [loadProfiles]);
 
   // Load accounts for the color picker.
   const loadAccounts = useCallback(async () => {
@@ -207,33 +218,15 @@ export function SettingsView() {
     }
   }
 
-  function applyPreset(id: string) {
-    const preset = AI_PRESETS.find((p) => p.id === id);
-    if (!preset) return;
-    setPresetId(id);
-    setProvider(preset.provider);
-    setBaseUrl(preset.baseUrl);
-    setModel(preset.model);
-    setApiKey("");
-    setClearKey(false);
-    setSaveMsg(null);
-  }
-
   async function saveSettings() {
     setSaving(true);
     setSaveMsg(null);
     try {
       const s = await api.updateAiSettings({
         analysis_mode: mode,
-        provider,
-        base_url: baseUrl,
-        model,
-        api_key: apiKey,
-        clear_api_key: clearKey,
+        embedding_model: embeddingModel,
       });
       setStatus(s);
-      setApiKey("");
-      setClearKey(false);
       setSaveMsg({ ok: true, text: t("settings.ai.saved") });
     } catch (e) {
       setSaveMsg({
@@ -246,6 +239,175 @@ export function SettingsView() {
   }
 
   const active = status?.api_key_configured && status.analysis_mode !== "rules_only";
+
+  // ---- provider profile handlers ----
+
+  function resetForm() {
+    setFormProfileId(null);
+    setFormLabel("");
+    setFormType("openai_compatible");
+    setFormBaseUrl("");
+    setFormModel("");
+    setFormApiKey("");
+    setProbeModels(null);
+    setProbeErr("");
+    setFormMsg(null);
+  }
+
+  function openNewForm() {
+    resetForm();
+    setFormOpen(true);
+  }
+
+  function openEditForm(p: ProviderProfile) {
+    setFormProfileId(p.id);
+    setFormLabel(p.label);
+    setFormType(p.provider_type);
+    setFormBaseUrl(p.base_url);
+    setFormModel(p.model);
+    setFormApiKey("");
+    setProbeModels(null);
+    setProbeErr("");
+    setFormMsg(null);
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    resetForm();
+  }
+
+  /** Switching provider_type re-fills last-used base_url/model for that type. */
+  function onFormTypeChange(type: ProviderType) {
+    setFormType(type);
+    if (formProfileId === null) {
+      // New profile: prefill from session memory, else from a saved profile of
+      // that type (so switching back never requires re-typing).
+      const remembered = lastByType.current[type];
+      if (remembered) {
+        setFormBaseUrl(remembered.baseUrl);
+        setFormModel(remembered.model);
+        return;
+      }
+      const saved = [...profiles].reverse().find((p) => p.provider_type === type);
+      if (saved) {
+        setFormBaseUrl(saved.base_url);
+        setFormModel(saved.model);
+      }
+    }
+  }
+
+  async function saveProfileForm() {
+    const label = formLabel.trim();
+    if (!label) {
+      setFormMsg({ ok: false, text: t("settings.profile.needLabel") });
+      return;
+    }
+    setFormBusy(true);
+    setFormMsg(null);
+    try {
+      const payload = {
+        label,
+        provider_type: formType,
+        base_url: formBaseUrl,
+        model: formModel,
+        api_key: formApiKey,
+      };
+      if (formProfileId === null) {
+        await api.createProviderProfile(payload);
+      } else {
+        await api.updateProviderProfile(formProfileId, payload);
+      }
+      // Remember the connection values for this type (auto-fill later).
+      lastByType.current[formType] = { baseUrl: formBaseUrl, model: formModel };
+      await loadProfiles();
+      await loadSettings();
+      closeForm();
+    } catch (e) {
+      setFormMsg({
+        ok: false,
+        text: `${t("settings.profile.saveFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setFormBusy(false);
+    }
+  }
+
+  async function activateProfile(id: number) {
+    setTestBusy(id);
+    setFormMsg(null);
+    try {
+      await api.activateProviderProfile(id);
+      await loadProfiles();
+      await loadSettings();
+    } catch (e) {
+      setFormMsg({
+        ok: false,
+        text: `${t("settings.profile.activateFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setTestBusy(null);
+    }
+  }
+
+  async function deleteProfile(p: ProviderProfile) {
+    if (!window.confirm(t("settings.profile.deleteConfirm"))) return;
+    setDeleteBusy(p.id);
+    try {
+      await api.deleteProviderProfile(p.id);
+      await loadProfiles();
+      await loadSettings();
+    } catch (e) {
+      setFormMsg({
+        ok: false,
+        text: `${t("settings.profile.deleteFailed")}${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      setDeleteBusy(null);
+    }
+  }
+
+  async function testProfile(p: ProviderProfile) {
+    setTestBusy(p.id);
+    setTestMsg(null);
+    try {
+      const r = await api.testProviderConnection(p.id);
+      setTestMsg({ id: p.id, ok: true, text: r.message });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.replace(/^\d{3}:\s*/, "") : String(e);
+      setTestMsg({ id: p.id, ok: false, text: `${t("settings.profile.testFail")}${msg}` });
+    } finally {
+      setTestBusy(null);
+    }
+  }
+
+  async function probeFormModels() {
+    const base = formBaseUrl.trim();
+    if (!base) {
+      setProbeErr(t("settings.profile.probeNeedUrl"));
+      setProbeModels(null);
+      return;
+    }
+    setProbeLoading(true);
+    setProbeErr("");
+    try {
+      const resp =
+        formProfileId !== null
+          ? await api.probeProviderModels(formProfileId)
+          : await api.probeAdHocModels({
+              provider_type: formType,
+              base_url: base,
+              api_key: formApiKey,
+            });
+      setProbeModels(resp.models);
+      if (resp.models.length === 0) setProbeErr(t("settings.profile.probeEmpty"));
+    } catch (e) {
+      setProbeModels(null);
+      setProbeErr(t("settings.profile.probeFail"));
+    } finally {
+      setProbeLoading(false);
+    }
+  }
 
   // ---- category handlers ----
   async function addCategory() {
@@ -354,76 +516,25 @@ export function SettingsView() {
           </div>
         </div>
 
-        {/* Provider preset */}
-        <div className="settings-row">
-          <span className="settings-label">{t("settings.ai.provider")}</span>
-          <div className="settings-field-group">
-            <select
-              className="settings-select"
-              value={presetId}
-              onChange={(e) => applyPreset(e.target.value)}
-            >
-              {AI_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {t(`settings.ai.provider.${p.id}`)}
-                </option>
-              ))}
-            </select>
-            <span className="settings-hint">{t("settings.ai.providerHint")}</span>
-          </div>
-        </div>
-
-        {/* Connection form */}
-        <div className="settings-row">
-          <span className="settings-label">{t("settings.ai.baseUrl")}</span>
-          <input
-            className="settings-input mono"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://api.openai.com/v1"
-            disabled={presetId === "env"}
-          />
-        </div>
-        <div className="settings-row">
-          <span className="settings-label">{t("settings.ai.model")}</span>
-          <input
-            className="settings-input mono"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="gpt-4o-mini"
-            disabled={presetId === "env"}
-          />
-        </div>
-        <div className="settings-row">
-          <span className="settings-label">{t("settings.ai.apiKey")}</span>
+        {/* Semantic search (embedding) — optional; greyed out when AI is off */}
+        <div className={`settings-row${!active ? " disabled" : ""}`}>
+          <span className="settings-label">{t("settings.ai.embeddingModel")}</span>
           <div className="settings-field-group">
             <input
               className="settings-input mono"
-              type="password"
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                setClearKey(false);
-              }}
-              placeholder={status?.api_key_configured ? "••••••••" : ""}
-              disabled={presetId === "env"}
+              value={embeddingModel}
+              onChange={(e) => setEmbeddingModel(e.target.value)}
+              placeholder={active ? "text-embedding-3-small" : ""}
+              disabled={!active}
             />
-            <span className="settings-hint">{t("settings.ai.apiKeyHint")}</span>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={clearKey}
-                onChange={(e) => {
-                  setClearKey(e.target.checked);
-                  if (e.target.checked) setApiKey("");
-                }}
-              />
-              {t("settings.ai.clearKey")}
-            </label>
+            <span className="settings-hint">
+              {t("settings.ai.embeddingHint")}
+              {!active && <em> · {t("settings.ai.embeddingDisabled")}</em>}
+            </span>
           </div>
         </div>
 
-        {/* Save */}
+        {/* Global save (analysis mode + embedding model) */}
         <div className="settings-row">
           <span className="settings-label" />
           <div className="settings-field-group">
@@ -434,6 +545,187 @@ export function SettingsView() {
               <span className={`sync-result ${saveMsg.ok ? "" : "error"}`}>{saveMsg.text}</span>
             )}
           </div>
+        </div>
+
+        {/* ---- AI 配置管理（多配置并存） ---- */}
+        <div className="profile-block">
+          <div className="profile-block-head">
+            <span className="mem-title">{t("settings.profile.title")}</span>
+            <button className="btn small primary-soft" onClick={openNewForm}>
+              {t("settings.profile.new")}
+            </button>
+          </div>
+          <p className="settings-hint">{t("settings.profile.sub")}</p>
+
+          {profiles.length === 0 && !formOpen ? (
+            <div className="profile-empty">
+              <p>{t("settings.profile.empty")}</p>
+              <button className="btn small primary-soft" onClick={openNewForm}>
+                {t("settings.profile.new")}
+              </button>
+            </div>
+          ) : (
+            <div className="profile-list">
+              {profiles.map((p) => (
+                <div key={p.id} className={`profile-card${p.is_active ? " active" : ""}`}>
+                  <div className="profile-card-main">
+                    <div className="profile-card-title">
+                      <span className="profile-label">{p.label}</span>
+                      {p.is_active && <span className="profile-badge active">{t("settings.profile.active")}</span>}
+                      <span className="profile-badge type">
+                        {t(`settings.profileType.${p.provider_type}`)}
+                      </span>
+                      {p.api_key_configured && <span className="profile-badge key">API Key</span>}
+                    </div>
+                    <div className="profile-card-meta mono">
+                      {p.base_url}
+                      {p.model && ` · ${p.model}`}
+                    </div>
+                  </div>
+                  <div className="profile-card-actions">
+                    {!p.is_active && (
+                      <button
+                        className="btn small ghost"
+                        onClick={() => activateProfile(p.id)}
+                        disabled={testBusy !== null}
+                      >
+                        {t("settings.profile.activate")}
+                      </button>
+                    )}
+                    <button
+                      className="btn small ghost"
+                      onClick={() => testProfile(p)}
+                      disabled={testBusy !== null}
+                    >
+                      {testBusy === p.id ? "…" : t("settings.profile.test")}
+                    </button>
+                    <button className="btn small ghost" onClick={() => openEditForm(p)}>
+                      {t("settings.profile.edit")}
+                    </button>
+                    <button
+                      className="btn small ghost danger"
+                      onClick={() => deleteProfile(p)}
+                      disabled={deleteBusy === p.id}
+                    >
+                      {deleteBusy === p.id ? "…" : t("settings.profile.delete")}
+                    </button>
+                  </div>
+                  {testMsg?.id === p.id && (
+                    <span className={`sync-result ${testMsg.ok ? "" : "error"}`}>{testMsg.text}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {formOpen && (
+            <div className="profile-form">
+              <div className="settings-row">
+                <span className="settings-label">{t("settings.profile.label")}</span>
+                <input
+                  className="settings-input"
+                  value={formLabel}
+                  onChange={(e) => setFormLabel(e.target.value)}
+                  placeholder={t("settings.profile.labelPlaceholder")}
+                />
+              </div>
+              <div className="settings-row">
+                <span className="settings-label">{t("settings.profile.type")}</span>
+                <select
+                  className="settings-select"
+                  value={formType}
+                  onChange={(e) => onFormTypeChange(e.target.value as ProviderType)}
+                >
+                  {(Object.keys(PROVIDER_TYPE_KEYS) as ProviderType[]).map((k) => (
+                    <option key={k} value={k}>
+                      {t(PROVIDER_TYPE_KEYS[k])}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="settings-row">
+                <span className="settings-label">{t("settings.ai.baseUrl")}</span>
+                <input
+                  className="settings-input mono"
+                  value={formBaseUrl}
+                  onChange={(e) => setFormBaseUrl(e.target.value)}
+                  placeholder="https://api.openai.com/v1 或 http://localhost:1234/v1"
+                />
+              </div>
+              <div className="settings-row">
+                <span className="settings-label">{t("settings.ai.model")}</span>
+                <div className="settings-field-group">
+                  <input
+                    className="settings-input mono"
+                    value={formModel}
+                    onChange={(e) => setFormModel(e.target.value)}
+                    placeholder="deepseek-chat / qwen2.5:7b / 手动输入均可"
+                  />
+                  <span className="settings-hint">
+                    <button
+                      type="button"
+                      className="btn small ghost"
+                      onClick={probeFormModels}
+                      disabled={probeLoading || formType === "rules_only"}
+                    >
+                      {probeLoading ? t("settings.profile.probeLoading") : t("settings.profile.probe")}
+                    </button>
+                  </span>
+                  {probeModels && probeModels.length > 0 && (
+                    <div className="probe-candidates">
+                      <span className="settings-hint">{t("settings.profile.probeHint")}</span>
+                      <div className="probe-candidate-row">
+                        {probeModels.map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            className="probe-candidate"
+                            onClick={() => setFormModel(m)}
+                          >
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {probeErr && (
+                    <span className="sync-result error">{t("settings.profile.probeFail")}</span>
+                  )}
+                </div>
+              </div>
+              <div className="settings-row">
+                <span className="settings-label">{t("settings.ai.apiKey")}</span>
+                <div className="settings-field-group">
+                  <input
+                    className="settings-input mono"
+                    type="password"
+                    value={formApiKey}
+                    onChange={(e) => setFormApiKey(e.target.value)}
+                    placeholder={
+                      formProfileId !== null
+                        ? "••••••••"
+                        : t("settings.profile.apiKeyPlaceholder")
+                    }
+                  />
+                  <span className="settings-hint">{t("settings.ai.apiKeyHint")}</span>
+                </div>
+              </div>
+              <div className="settings-row">
+                <span className="settings-label" />
+                <div className="settings-field-group profile-form-actions">
+                  <button className="btn primary" onClick={saveProfileForm} disabled={formBusy}>
+                    {formBusy ? "…" : t("settings.profile.save")}
+                  </button>
+                  <button className="btn small ghost" onClick={closeForm}>
+                    {t("settings.profile.cancel")}
+                  </button>
+                  {formMsg && (
+                    <span className={`sync-result ${formMsg.ok ? "" : "error"}`}>{formMsg.text}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* AI Memory — hidden in pure-rule mode (needs an LLM) */}

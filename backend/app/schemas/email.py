@@ -54,6 +54,7 @@ class EmailOut(BaseModel):
     id: int
     account_id: int
     platform: str
+    message_id: str
     thread_id: str
     direction: MailDirection
     sender: str
@@ -105,3 +106,10 @@ class FullBodyOut(BaseModel):
 
     html: str = ""
     text: str = ""
+
+
+class DraftReply(BaseModel):
+    """One AI-generated reply draft (editable by the user before sending)."""
+
+    style: str
+    body: str

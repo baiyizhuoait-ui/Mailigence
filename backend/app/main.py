@@ -20,6 +20,7 @@ from app.api import (
     accounts,
     ads,
     categories,
+    chat,
     dashboard,
     emails,
     idle,
@@ -28,6 +29,7 @@ from app.api import (
     oauth,
     replies,
     reports,
+    search,
 )
 from app.api.settings import router as settings_router
 from app.config import settings
@@ -68,6 +70,28 @@ async def _analysis_sweep_loop() -> None:
         await asyncio.sleep(ANALYSIS_SWEEP_SECONDS)
 
 
+async def _embedding_sweep_loop() -> None:
+    """Periodically embed mails that still lack a vector (semantic search).
+
+    Mirrors the analysis sweep: new imports / syncs produce mails whose
+    ``embedding`` column is NULL; this loop keeps the backlog working in the
+    background so the search UI can gradually gain semantic recall.
+    """
+    await asyncio.sleep(20)  # let startup settle
+    while True:
+        try:
+            from app.services.embedding_service import manager as emb_mgr
+            from app.services.embedding_service import pending_embedding_count
+
+            async with SessionLocal() as db:
+                pending = await pending_embedding_count(db)
+            if pending > 0:
+                emb_mgr.start()
+        except Exception as exc:
+            _log.error("Embedding sweep error: %s", exc)
+        await asyncio.sleep(ANALYSIS_SWEEP_SECONDS)
+
+
 async def _background_sync_loop() -> None:
     """Periodically sync all accounts as a fallback for non-IDLE servers."""
     await asyncio.sleep(10)  # let startup settle
@@ -87,6 +111,8 @@ async def _background_sync_loop() -> None:
                         if count > 0:
                             from app.services.analysis_service import manager as analysis_mgr
                             analysis_mgr.start(acct.id)
+                            from app.services.embedding_service import manager as emb_mgr
+                            emb_mgr.start()
                     except Exception as exc:
                         # Don't crash the loop, but surface the failure in the
                         # logs instead of silently swallowing it.
@@ -127,11 +153,14 @@ async def lifespan(app: FastAPI):
     # Start the analysis sweep so unanalyzed/uncategorized mail is always
     # picked up automatically.
     analysis_task = asyncio.create_task(_analysis_sweep_loop())
+    # Start the embedding backfill sweep (semantic search vectors).
+    embedding_task = asyncio.create_task(_embedding_sweep_loop())
     yield
     # Stop all IDLE listeners on shutdown.
     idle_manager.stop_all()
     sync_task.cancel()
     analysis_task.cancel()
+    embedding_task.cancel()
 
 
 app = FastAPI(
@@ -194,3 +223,5 @@ app.include_router(replies.router)
 app.include_router(idle.router)
 app.include_router(settings_router)
 app.include_router(memories.router)
+app.include_router(search.router)
+app.include_router(chat.router)

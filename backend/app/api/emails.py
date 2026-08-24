@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -11,7 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.email import MailDirection, UnifiedEmail
 from app.models.email_account import AuthType, EmailAccount
-from app.schemas.email import EmailListResponse, EmailOut, FullBodyOut
+from app.schemas.email import (
+    DraftReply,
+    EmailListResponse,
+    EmailOut,
+    FullBodyOut,
+    _clean_html_snippet,
+)
+from app.services.ai_config import load_ai_config
+from app.services.memories import get_memory_texts
+from app.services import reply_draft_service
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
@@ -126,6 +138,40 @@ async def get_email(email_id: int, db: AsyncSession = Depends(get_db)) -> Unifie
     return email
 
 
+async def _fetch_full_body(db: AsyncSession, email: UnifiedEmail) -> dict:
+    """Fetch the full ``{html, text}`` body from the source mailbox.
+
+    Raises ``RuntimeError`` with a readable message when the body can't be
+    fetched (unreachable server, deleted message, ...) so callers can degrade.
+    """
+    account = await db.get(EmailAccount, email.account_id)
+    if account is None:
+        raise RuntimeError("Account not found")
+
+    from app.services import mail_sync, ms_graph
+    from app.services.imap_client import open_connection
+
+    sent = email.direction == MailDirection.SENT
+    if account.auth_type == AuthType.OAUTH_MICROSOFT:
+        credential = await mail_sync.resolve_credential(account)
+        body = await ms_graph.fetch_message_body(
+            credential, email.message_id, sent=sent
+        )
+    else:
+        credential = await mail_sync.resolve_credential(account)
+        client = await open_connection(account, credential)
+        try:
+            body = await asyncio.to_thread(
+                client.fetch_full_body, email.message_id, sent=sent
+            )
+        finally:
+            await asyncio.to_thread(client.logout)
+
+    if not body.get("html") and not body.get("text"):
+        raise RuntimeError("Message body was not found on the server")
+    return {"html": body.get("html", ""), "text": body.get("text", "")}
+
+
 @router.get("/{email_id}/full", response_model=FullBodyOut)
 async def get_email_full_body(
     email_id: int, db: AsyncSession = Depends(get_db)
@@ -139,40 +185,71 @@ async def get_email_full_body(
     email = await db.get(UnifiedEmail, email_id)
     if email is None:
         raise HTTPException(status_code=404, detail="Email not found")
-    account = await db.get(EmailAccount, email.account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-    from app.services import mail_sync, ms_graph
-    from app.services.imap_client import open_connection
-
-    sent = email.direction == MailDirection.SENT
     try:
-        if account.auth_type == AuthType.OAUTH_MICROSOFT:
-            credential = await mail_sync.resolve_credential(account)
-            body = await ms_graph.fetch_message_body(
-                credential, email.message_id, sent=sent
-            )
-        else:
-            credential = await mail_sync.resolve_credential(account)
-            client = await open_connection(account, credential)
-            try:
-                body = await asyncio.to_thread(
-                    client.fetch_full_body, email.message_id, sent=sent
-                )
-            finally:
-                await asyncio.to_thread(client.logout)
+        body = await _fetch_full_body(db, email)
     except Exception as exc:
         raise HTTPException(
             status_code=404,
             detail=f"Could not fetch the full message: {exc}",
         ) from exc
+    return FullBodyOut(html=body["html"], text=body["text"])
 
-    if not body.get("html") and not body.get("text"):
+
+@router.post("/{email_id}/draft-replies", response_model=list[DraftReply])
+async def generate_draft_replies(
+    email_id: int, db: AsyncSession = Depends(get_db)
+) -> list[DraftReply]:
+    """Generate 1-2 AI reply drafts for an email.
+
+    Requires a configured LLM (rules mode → 400). Results are cached per
+    (sender, subject, body, user-preferences) content hash, so re-requests
+    with unchanged inputs return the stored drafts without another AI call.
+    """
+    email = await db.get(UnifiedEmail, email_id)
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    cfg = await load_ai_config(db)
+    if not cfg.use_ai:
         raise HTTPException(
-            status_code=404, detail="Message body was not found on the server"
+            status_code=400,
+            detail="当前为规则模式（未配置 AI Key）。请在「设置 → AI 分析」中配置模型后使用回复草稿功能。",
         )
-    return FullBodyOut(html=body.get("html", ""), text=body.get("text", ""))
+
+    # Prefer the full body; fall back to the stored snippet if the source
+    # mailbox is unreachable so generation never hard-fails on the fetch.
+    try:
+        fetched = await _fetch_full_body(db, email)
+        body_text = fetched["text"] or _clean_html_snippet(fetched["html"])
+    except Exception:
+        body_text = email.body_snippet
+    body_text = (body_text or "")[: reply_draft_service.BODY_MAX_CHARS]
+
+    memories = await get_memory_texts(db)
+    cache_hash = hashlib.sha256(
+        f"{email.sender}|{email.subject}|{body_text}|{json.dumps(memories, ensure_ascii=False)}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    if email.cached_draft_replies and email.draft_cache_hash == cache_hash:
+        return [DraftReply(**item) for item in email.cached_draft_replies]
+
+    try:
+        drafts = await reply_draft_service.generate_draft_replies(
+            cfg, email.sender, email.subject, body_text, memories
+        )
+    except Exception as exc:
+        # Surface a friendly 502 instead of a raw 500 with the provider's
+        # error blob (e.g. local servers rejecting the model name).
+        raise HTTPException(
+            status_code=502,
+            detail=reply_draft_service.friendly_llm_error(exc),
+        ) from exc
+    email.cached_draft_replies = drafts
+    email.cached_at = datetime.now(timezone.utc)
+    email.draft_cache_hash = cache_hash
+    await db.commit()
+    return [DraftReply(**item) for item in drafts]
 
 
 @router.patch("/{email_id}/read", response_model=EmailOut)

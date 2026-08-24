@@ -3,6 +3,7 @@ import { api } from "../api";
 import { useI18n } from "../i18n";
 import {
   PLATFORM_LABEL,
+  type DraftReply,
   type EmailCategory,
   type UnifiedEmail,
 } from "../types";
@@ -25,6 +26,19 @@ const ACTION_LABELS: Record<string, string> = {
   ignore: "priority.none",
 };
 
+// Webmail home URLs used as the fallback for the "open original mailbox"
+// deep link — Gmail additionally gets a precise per-message link.
+const MAILBOX_HOME: Record<string, string> = {
+  outlook: "https://outlook.live.com/mail/0/",
+  qq: "https://mail.qq.com/",
+  netease: "https://mail.163.com/",
+  yahoo: "https://mail.yahoo.com/",
+  icloud: "https://www.icloud.com/mail/",
+  aol: "https://mail.aol.com/",
+  zoho: "https://mail.zoho.com/",
+  yandex: "https://mail.yandex.com/",
+};
+
 function priorityClass(score: number | null): string {
   if (score === null) return "";
   if (score >= 80) return "priority-high";
@@ -42,12 +56,28 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   const [fullBody, setFullBody] = useState<{ html: string; text: string } | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [fullError, setFullError] = useState<string | null>(null);
+  // ---- AI reply drafts ----
+  const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [drafts, setDrafts] = useState<DraftReply[] | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftEdits, setDraftEdits] = useState<string[]>([]);
 
   const catLabel = (name: string) =>
     categories.find((c) => c.name === name)?.label ?? name;
 
   useEffect(() => {
     api.listCategories().then(setCategories).catch(() => {});
+  }, []);
+
+  // Whether AI reply drafting is usable: needs a key and a non-rules mode.
+  // If the settings fetch fails, assume available and let the backend 400.
+  useEffect(() => {
+    api
+      .getAiSettings()
+      .then((s) => setAiAvailable(s.api_key_configured && s.analysis_mode !== "rules_only"))
+      .catch(() => setAiAvailable(true));
   }, []);
 
   const showToast = (kind: Toast["kind"], text: string) => {
@@ -110,6 +140,56 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     }
   }
 
+  async function handleGenerateDrafts() {
+    if (!email) return;
+    setDraftLoading(true);
+    setDraftError(null);
+    try {
+      const result = await api.generateDraftReplies(email.id);
+      setDrafts(result);
+      setDraftEdits(result.map((d) => d.body));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setDraftError(msg.replace(/^\d{3}:\s*/, ""));
+    } finally {
+      setDraftLoading(false);
+    }
+  }
+
+  async function copyBody(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("success", t("draft.copied"));
+    } catch {
+      showToast("error", t("draft.copyFailed"));
+    }
+  }
+
+  function openMailboxReply() {
+    if (!email) return;
+    // Gmail: jump straight to this exact message via an RFC822 Message-ID search.
+    if (email.platform === "gmail") {
+      if (email.message_id) {
+        const query = `rfc822msgid:${email.message_id}`;
+        window.open(
+          `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query)}`,
+          "_blank",
+          "noopener,noreferrer",
+        );
+      } else {
+        window.open("https://mail.google.com/mail/u/0/", "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+    // Other providers degrade to their inbox; unknown ones get a hint instead.
+    const url = MAILBOX_HOME[email.platform];
+    if (url) {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } else {
+      showToast("info", t("draft.noDeeplink"));
+    }
+  }
+
   useEffect(() => {
     if (emailId === null) {
       setEmail(null);
@@ -119,6 +199,11 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     setLoading(true);
     setFullBody(null);
     setFullError(null);
+    // Drafts belong to a single email — reset when switching.
+    setDraftOpen(false);
+    setDrafts(null);
+    setDraftEdits([]);
+    setDraftError(null);
     api
       .getEmail(emailId)
       .then((data) => {
@@ -268,6 +353,74 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                   </div>
                 ) : (
                   <p className="hint">{t("detail.notAnalyzed")}</p>
+                )}
+              </div>
+
+              <div
+                className={`detail-ai-replies${aiAvailable === false ? " disabled" : ""}`}
+                title={aiAvailable === false ? t("draft.aiDisabled") : undefined}
+              >
+                <div
+                  className="detail-ai-replies-head"
+                  onClick={() => setDraftOpen((v) => !v)}
+                >
+                  <p className="detail-section-title">{t("draft.sectionTitle")}</p>
+                  <span className="draft-chevron">{draftOpen ? "▾" : "▸"}</span>
+                </div>
+                {draftOpen && (
+                  <div className="detail-ai-replies-body">
+                    {aiAvailable === false ? (
+                      <p className="hint">{t("draft.aiDisabled")}</p>
+                    ) : draftLoading ? (
+                      <p className="hint">{t("draft.generating")}</p>
+                    ) : draftError ? (
+                      <div className="draft-error">
+                        <span>
+                          {t("draft.failed")}
+                          {draftError}
+                        </span>
+                        <button className="btn small ghost" onClick={handleGenerateDrafts}>
+                          {t("draft.retry")}
+                        </button>
+                      </div>
+                    ) : drafts === null ? (
+                      <button className="btn small primary-soft" onClick={handleGenerateDrafts}>
+                        {t("draft.generate")}
+                      </button>
+                    ) : (
+                      <div className="draft-list">
+                        {drafts.map((draft, i) => (
+                          <div className="draft-item" key={i}>
+                            {draft.style && <div className="draft-style">{draft.style}</div>}
+                            <textarea
+                              className="draft-body"
+                              rows={4}
+                              value={draftEdits[i] ?? ""}
+                              onChange={(e) => {
+                                const next = [...draftEdits];
+                                next[i] = e.target.value;
+                                setDraftEdits(next);
+                              }}
+                            />
+                            <div className="draft-actions">
+                              <button
+                                className="btn small ghost"
+                                onClick={() => copyBody(draftEdits[i] ?? "")}
+                              >
+                                {t("draft.copy")}
+                              </button>
+                              <button className="btn small info" onClick={openMailboxReply}>
+                                {t("draft.openMailbox")}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        <button className="btn small ghost draft-regenerate" onClick={handleGenerateDrafts}>
+                          {t("draft.regenerate")}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 

@@ -19,6 +19,13 @@ Mailigence is a self-hosted email aggregation and AI analysis tool. Connect Gmai
 - **AI memory system** — Tell the AI your preferences in the chat box on the Settings page (e.g. "always treat Amazon promos as ads", "pin my boss's emails to the top"), and it distills them into memories that are applied to every subsequent analysis — it gets smarter the more you use it
 - **Dynamic categories** — No manual setup needed: the AI automatically discovers and creates new categories as they appear in your mail. You can also add / rename / delete categories yourself; deleting a category re-queues its emails for re-classification
 - **Schedule extraction** — AI pulls meetings, deadlines, and appointments from email bodies — understanding natural phrases like "tomorrow", "next Monday" or "3pm" — and groups them into Today / Tomorrow / This Week / Upcoming
+- **AI config management** — Keep multiple provider configs side by side (cloud and local: DeepSeek, local Ollama, LM Studio…) and switch the active one with one click; model lists are auto-probed
+- **AI reply drafts** — While reading, generate 1-2 editable reply drafts; copy the body or jump to the original mailbox to paste & send
+- **AI mail Q&A** — Ask natural-language questions across all mailboxes (e.g. "what events did school announce recently?"); answers cite the actual emails used, with clickable citation cards
+
+### 🔍 Search
+- **Full-text search** — A global top-bar search box available on every page, with 300ms debounced live preview and a dedicated results page with account / category / date filters; matched snippets are highlighted (`<mark>`)
+- **Semantic search (optional)** — Enabling an embedding model adds vector recall to handle "related topic but no literal overlap" and cross-language queries; keyword + vector + structured filters are fused with RRF
 
 ### 📬 Reading & Handling
 - **Multi-account aggregation** — Manage all your mailboxes (Gmail / Outlook / QQ Mail / 163 / any IMAP server) from one dashboard, with support for both app-specific passwords and OAuth2; importing preserves the original read/unread state
@@ -46,11 +53,59 @@ Mailigence is a self-hosted email aggregation and AI analysis tool. Connect Gmai
 | Frontend | React 18 · TypeScript · Vite |
 | Database | PostgreSQL 14+ |
 | Email | IMAP (imaplib) · IMAP IDLE |
-| AI | OpenAI-compatible API / Anthropic / Ollama (swappable) |
+| AI | OpenAI-compatible / Anthropic / any local inference server (Ollama · LM Studio · vLLM · llama.cpp) · multi-config with one-click switching |
 
 ## 🚀 Quick Start
 
-### Windows — one-click start (recommended)
+This repo offers two independent launch paths — pick either:
+
+| Path | Best for | Command |
+|---|---|---|
+| **Cross-platform Docker** (recommended) | macOS / Linux / Windows (needs Docker) | `docker compose up -d` |
+| **Windows without Docker** | Windows (no Docker required) | double-click `start.bat` |
+
+### Docker one-click start (cross-platform, recommended)
+
+Requirements: **Docker 24+** (with the compose plugin).
+
+No Python / Node.js / PostgreSQL install needed — one command brings up all three
+services (database + backend + frontend):
+
+```bash
+# 1. Clone the repo
+git clone <repo-url> && cd Mailigence
+
+# 2. Prepare environment variables (AI keys, OAuth, ... — leaving them empty
+#    still works in pure-rules mode)
+cp .env.docker.example .env.docker
+
+# 3. Start everything (first run builds the images, give it a minute)
+docker compose up -d
+```
+
+Then open:
+
+- Frontend: **http://localhost:5173**
+- Backend API: http://localhost:8000 (health: http://localhost:8000/api/health)
+- Database: localhost:5432 (`mailigence` / `mailigence_dev_pw` / `mailigence`)
+
+Notes:
+
+- **Auto schema**: the backend container creates all tables, seeds built-in
+  categories and applies incremental migrations on startup — no manual SQL.
+- **Encryption key**: if `CREDENTIAL_ENCRYPTION_KEY` is left empty, the backend
+  container generates one on **first start** and persists it to a named volume,
+  so restarts never rotate it (rotating would make stored credentials
+  undecryptable).
+- **Persistence**: DB data and the encryption key live in the named volumes
+  `mailigence_pgdata` and `mailigence_backend_env`.
+- Logs: `docker compose logs -f backend`
+- Stop (keep data): `docker compose down`
+- Full reset (drops data, use with care): `docker compose down -v`
+- If you previously ran the old DB-only compose file, run `docker compose down`
+  first to avoid container-name conflicts.
+
+### Windows — one-click start without Docker (start.bat / start.ps1)
 
 Requirements: **Python 3.11+** and **Node.js 18+** (add both to PATH during install).
 
@@ -132,43 +187,134 @@ AI_PROVIDER=openai
 AI_API_KEY=
 AI_BASE_URL=https://api.deepseek.com/v1     # example: DeepSeek
 AI_MODEL=deepseek-chat
+
+# ---- Semantic search (optional — without it, retrieval is keyword-only) ----
+AI_EMBEDDING_MODEL=          # empty -> auto text-embedding-3-small (needs the pgvector extension)
+EMBEDDING_DIM=1536           # must match the embedding model (nomic-embed-text = 768)
 ```
 
-## 🤖 Supported AI Providers
+## 🤖 AI Config Management (multiple profiles)
 
-The settings page (Settings → AI Email Analysis) has built-in presets for common providers — pick one and the endpoint auto-fills:
+Settings → AI Email Analysis → **AI Configs**: save cloud and local providers
+side by side and switch between them freely — nothing gets overwritten.
 
-| Provider | Base URL example | Model example | Notes |
-|---|---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | Best quality, requires international billing |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | Direct access in China, cost-effective |
-| Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` | Direct access in China |
-| Qwen (Tongyi) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | Alibaba Cloud, direct access in China |
-| Zhipu GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | Direct access in China, free tier available |
-| Ollama (local) | `http://localhost:11434/v1` | `qwen2.5:7b` | Free, offline, private |
-| Anthropic Claude | `https://api.anthropic.com/v1` | `claude-sonnet-4-...` | International |
+### Basic workflow
 
-**Three analysis modes:**
+1. **New config** — fill in:
+   - **Name**: anything, e.g. `DeepSeek cloud` / `Local Ollama` / `Local LM Studio`
+   - **Type**: `OpenAI-compatible` (OpenAI / DeepSeek / Kimi / Qwen / GLM / **Ollama /
+     LM Studio / vLLM / llama.cpp / oneAPI** all use this) | `Anthropic` | `Rules only (no AI)`
+   - **Base URL**: free text, e.g. `https://api.deepseek.com/v1` or `http://localhost:11434/v1`
+   - **Model**: type it manually, or click **Probe model list** to fetch candidates from
+     `{Base URL}/models` (click one to fill it in — still editable; probing failure
+     never blocks manual entry)
+   - **API key**: required for cloud; **leave blank** for local servers without auth
+2. **Save** — the first config becomes active automatically; for later ones press
+   **Set as active** on the card
+3. **Test connection** — the card's button requests `{Base URL}/models` (works for every type)
+4. **Edit / Delete** — change connection details anytime; deleting the active config
+   automatically activates the first remaining one
+5. When creating a config, switching the type auto-fills the **last-used Base URL /
+   model** for that type
 
-- **Smart mode (recommended)** — uses AI when configured, automatically falls back to rules on failure or when unconfigured
+> Base URL and model are **free-text only** — probing is a convenience, never a
+> hard requirement. If an endpoint doesn't support it, just type the model name.
+
+### Analysis modes (global)
+
+- **Smart mode (recommended)** — uses AI when configured, falls back to rules otherwise
 - **AI-only mode** — always calls the AI provider
-- **Rules-only mode** — no AI calls at all; pure keyword/header-based analysis, zero cost and zero external dependency
+- **Rules-only mode** — no AI calls at all; pure keyword/header analysis, zero cost
 
-> API keys saved in the settings page are stored **encrypted** in the database. You can also leave it blank and use `AI_API_KEY` from `.env` instead. Changing settings automatically invalidates the analysis cache.
+> API keys are stored **encrypted** in the database; leaving the key blank while
+> editing keeps the stored one. Config changes invalidate the analysis cache.
+
+### Common cloud endpoints
+
+| Provider | Base URL | Model example |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| Qwen (Tongyi) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Zhipu GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
+| Anthropic Claude | `https://api.anthropic.com/v1` | `claude-sonnet-4-...` |
+
+### Local Ollama setup (free, offline, private)
+
+1. **Install Ollama** from https://ollama.com/ (Windows/macOS installer, or
+   `curl -fsSL https://ollama.com/install.sh | sh` on Linux)
+2. **Pull a model** (a mid-size one is plenty for email analysis):
+
+   ```bash
+   ollama pull qwen2.5:7b
+   ollama list
+   ```
+
+3. **Verify the service**: Ollama listens on `http://localhost:11434` by default,
+   and its **OpenAI-compatible endpoint** is `http://localhost:11434/v1` — opening
+   `http://localhost:11434/v1/models` in a browser should return JSON
+4. **Create a config in Mailigence**:
+   - Name: `Local Ollama`
+   - Type: **OpenAI-compatible**
+   - Base URL: `http://localhost:11434/v1`
+   - Model: `qwen2.5:7b` (or probe to auto-fill)
+   - API key: **leave blank**
+5. **Save → Set as active**: classification, priorities, schedule extraction,
+   reply drafts and chat Q&A all run on the local model, fully offline.
+
+> **Local semantic search (optional)**: Ollama also serves an OpenAI-compatible
+> `/v1/embeddings`. Pull `ollama pull nomic-embed-text` and enter it in the
+> "Semantic search model" field. Note its vector dimension is **768** (vs 1536 for
+> text-embedding-3-small): on a fresh DB set `EMBEDDING_DIM=768` in `backend/.env`
+> before first startup; on an existing DB drop the embedding column and restart
+> (vectors regenerate automatically).
+
+> **Other local servers work the same way** — LM Studio (`http://localhost:1234/v1`),
+> vLLM / llama.cpp server / oneAPI, anything exposing an OpenAI-compatible `/v1`
+> endpoint. No tool-specific setup needed.
+
+### Local small / thinking model adaptation
+
+**Symptoms**: with a small local model (especially "thinking" models such as the qwen3 family), reply-draft / chat Q&A generation is extremely slow (tens of seconds to minutes), or fails with "AI 返回的回复草稿无法解析" (unparseable draft), or returns empty output.
+
+**Root cause**: thinking models called through the OpenAI-compatible `/v1/chat/completions` endpoint emit a long "reasoning" block first, exhausting the `max_tokens` budget — the actual answer (`content`) never gets produced (empty), or the JSON gets cut off, so parsing fails. The time is spent mostly on thinking.
+
+**What the app does automatically**:
+
+- Detects local Ollama (port 11434) and routes calls through its native `/api/chat` with `think: false` to disable reasoning (measured: ~46s → ~3.5s)
+- Raises the token budget (drafts / chat Q&A: 2048) and timeout (120s), and simplifies the prompts
+- Provides tolerant JSON parsing: repairs trailing commas and raw newlines inside strings, and accepts single-object / wrapped-array output shapes
+
+**If it is still slow or failing, check in order**:
+
+1. Run `ollama list` and make sure the configured model name matches **exactly** (case and `:tag`, e.g. `qwen3:8b` — not just `qwen3`)
+2. Confirm the Ollama service is running (opening `http://localhost:11434/v1/models` in a browser should return JSON)
+3. Switch to a model with a **larger context window** (e.g. `qwen2.5:14b` / `qwen3:14b`); `ollama show <model>` shows its context length
+4. Read the hint after `LLM HTTP ...` in the backend logs — it distinguishes "input too long" from "invalid model name"
 
 ## 📁 Project Structure
 
 ```
 mailigence/
+├── start.bat / start.ps1      # Windows one-click start without Docker
+├── stop.bat / stop.ps1        # Stop backend + frontend (stop.ps1 -StopDb also stops the DB)
+├── docker-compose.yml         # Cross-platform Docker: postgres + backend + frontend
+├── .env.docker.example        # Env template for Docker (copy to .env.docker)
 ├── backend/
 │   ├── app/
 │   │   ├── api/          # FastAPI routes (accounts/dashboard/settings/reports…)
 │   │   ├── models/       # SQLAlchemy models
 │   │   ├── schemas/      # Pydantic schemas
 │   │   └── services/     # Email sync, AI analysis, IMAP IDLE, encryption…
-│   ├── .env.example      # Environment variable template
+│   ├── Dockerfile        # Backend image (python:3.11-slim, psycopg[binary] no build tools)
+│   ├── entrypoint.sh     # Container entrypoint (persists auto-generated encryption key)
+│   ├── run.py            # Local launcher (Windows-compatible)
+│   ├── .env.example      # Environment variable template (local dev)
 │   └── requirements.txt
 ├── frontend/
+│   ├── Dockerfile        # Multi-stage (node build → nginx static hosting)
+│   ├── nginx.conf        # SPA fallback + /api reverse proxy to backend
 │   ├── src/
 │   │   ├── components/   # React components
 │   │   ├── api.ts        # Backend API client
@@ -183,7 +329,13 @@ mailigence/
 
 **Can I use it without an AI key?** Yes. Choose "rules-only mode", or just leave AI unconfigured and smart mode will fall back to rules automatically. Every feature (classification, priority, schedule extraction) has a rule-based fallback implementation.
 
-**How do I use Ollama?** Install [Ollama](https://ollama.com/) → `ollama pull qwen2.5:7b` → select "Local Ollama Model" in the settings page.
+**How do I use Ollama?** Full tutorial above: [Local Ollama setup](#local-ollama-setup-free-offline-private) — install Ollama → `ollama pull qwen2.5:7b` → create an "OpenAI-compatible" config in Settings → AI Configs with Base URL `http://localhost:11434/v1`, leave the key blank, save and set it active.
+
+**Local model is slow / drafts fail to parse?** See "Local small / thinking model adaptation" above: thinking models (e.g. qwen3) burn the token budget on reasoning — the app already disables thinking for Ollama and raises budget/timeout. If it still fails, check the model name against `ollama list` (case and `:tag`), or switch to a model with a larger context window.
+
+**Why is semantic search unavailable?** It needs the **pgvector** extension in PostgreSQL. The Docker deployment ships it (`pgvector/pgvector:pg16` image); for the bundled portable build you must install pgvector yourself — otherwise the log shows `pgvector not available — semantic search disabled` and retrieval falls back to keyword-only (chat Q&A says so in its system prompt), which affects nothing else.
+
+**Can't find emails that are topically related but share no literal keywords?** That's exactly what semantic search fixes: once an embedding model is configured and pgvector is available, retrieval automatically upgrades to keyword + vector dual recall.
 
 **Port conflicts?** Backend defaults to 8000, frontend to 5173. Change these via `APP_PORT` in `.env` and in `vite.config.ts`.
 

@@ -8,15 +8,24 @@ import type {
   BlockedSender,
   CategoryCreateInput,
   CategoryUpdateInput,
+  ChatMessage,
+  ChatResponse,
   DashboardSummary,
+  DraftReply,
   EmailAccount,
   EmailCategory,
   EmailListResponse,
   IdleStatus,
   ImportJob,
+  ProviderModels,
+  ProviderProfile,
+  ProviderProfileInput,
+  ProviderType,
   ReportRange,
   ReportSummary,
   ScheduleResult,
+  SearchParams,
+  SearchResponse,
   SyncResult,
   UnifiedEmail,
   UnsubscribeInfo,
@@ -44,7 +53,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ status: string; encryption_configured: boolean }>("/health"),
+  health: () =>
+    request<{
+      status: string;
+      encryption_configured: boolean;
+      oauth_google_configured: boolean;
+      oauth_microsoft_configured: boolean;
+    }>("/health"),
 
   listAccounts: () => request<EmailAccount[]>("/accounts"),
 
@@ -135,6 +150,19 @@ export const api = {
 
   getEmailFullBody: (id: number) =>
     request<{ html: string; text: string }>(`/emails/${id}/full`),
+
+  generateDraftReplies: (id: number) =>
+    request<DraftReply[]>(`/emails/${id}/draft-replies`, { method: "POST" }),
+
+  // ---------------- Full-text search ----------------
+
+  search: (params: SearchParams) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+    });
+    return request<SearchResponse>(`/search?${qs.toString()}`);
+  },
 
   batchEmailAction: (ids: number[], action: string) =>
     request<{ updated: number }>("/emails/batch", {
@@ -290,6 +318,51 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // ---- AI provider profiles (multi-config) ----
+
+  listProviderProfiles: () => request<ProviderProfile[]>("/settings/provider-profiles"),
+
+  createProviderProfile: (payload: ProviderProfileInput) =>
+    request<ProviderProfile>("/settings/provider-profiles", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateProviderProfile: (id: number, payload: ProviderProfileInput) =>
+    request<ProviderProfile>(`/settings/provider-profiles/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteProviderProfile: (id: number) =>
+    request<{ ok: boolean }>(`/settings/provider-profiles/${id}`, {
+      method: "DELETE",
+    }),
+
+  activateProviderProfile: (id: number) =>
+    request<ProviderProfile>(`/settings/provider-profiles/${id}/activate`, {
+      method: "POST",
+    }),
+
+  probeProviderModels: (id: number) =>
+    request<ProviderModels>(`/settings/provider-profiles/${id}/models`),
+
+  probeAdHocModels: (payload: {
+    provider_type: ProviderType;
+    base_url: string;
+    api_key: string;
+  }) =>
+    request<ProviderModels>("/settings/provider-profiles/probe", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  testProviderConnection: (id: number) =>
+    request<{ ok: boolean; message: string }>(
+      `/settings/provider-profiles/${id}/test`,
+      { method: "POST" },
+    ),
+
   // ---------------- AI memory ----------------
 
   listMemories: () => request<AiMemory[]>("/ai/memories"),
@@ -302,4 +375,12 @@ export const api = {
 
   deleteMemory: (id: number) =>
     request<{ deleted: number }>(`/ai/memories/${id}`, { method: "DELETE" }),
+
+  // ---------------- AI chat ----------------
+
+  chat: (payload: { message: string; history: ChatMessage[] }) =>
+    request<ChatResponse>("/chat", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 };

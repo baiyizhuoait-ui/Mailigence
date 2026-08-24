@@ -104,6 +104,13 @@ class ImportJobManager:
                 analysis_manager.start(account_id)
             except Exception:
                 pass
+            # Kick off semantic embedding generation for the new mails.
+            try:
+                from app.services.embedding_service import manager as embedding_manager
+
+                embedding_manager.start()
+            except Exception:
+                pass
 
     async def _run_imap_import(
         self, db: AsyncSession, job: ImportJob, account: EmailAccount,

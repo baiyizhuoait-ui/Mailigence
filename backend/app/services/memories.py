@@ -47,13 +47,13 @@ async def _llm_json(cfg: AiConfig, system_prompt: str, user_content: str) -> lis
         }
         body = {
             "model": cfg.model,
-            "max_tokens": 1000,
+            "max_tokens": 2048,
             "temperature": 0,
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_content}],
         }
         url = cfg.base_url.rstrip("/") + "/messages"
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(url, headers=headers, json=body)
             if resp.status_code != 200:
                 raise RuntimeError(f"LLM HTTP {resp.status_code}: {resp.text[:200]}")
@@ -73,10 +73,10 @@ async def _llm_json(cfg: AiConfig, system_prompt: str, user_content: str) -> lis
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0,
-        "max_tokens": 1000,
+        "max_tokens": 2048,
     }
     url = cfg.base_url.rstrip("/") + "/chat/completions"
-    async with httpx.AsyncClient(timeout=45) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(url, headers=headers, json=body)
         if resp.status_code != 200:
             raise RuntimeError(f"LLM HTTP {resp.status_code}: {resp.text[:200]}")

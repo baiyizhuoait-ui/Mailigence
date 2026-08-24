@@ -31,6 +31,7 @@ export interface UnifiedEmail {
   id: number;
   account_id: number;
   platform: string;
+  message_id: string;
   thread_id: string;
   direction: MailDirection;
   sender: string;
@@ -77,6 +78,39 @@ export interface CategoryUpdateInput {
 export interface EmailListResponse {
   total: number;
   items: UnifiedEmail[];
+}
+
+export interface DraftReply {
+  style: string;
+  body: string;
+}
+
+// ---------------- Full-text search ----------------
+
+export interface SearchResult {
+  id: number;
+  subject: string;
+  sender: string;
+  account_id: number;
+  category: string | null;
+  priority_score: number | null;
+  received_at: string | null;
+  snippet_html: string;
+}
+
+export interface SearchResponse {
+  total: number;
+  results: SearchResult[];
+}
+
+export interface SearchParams {
+  q: string;
+  account_id?: number;
+  category?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface SyncResult {
@@ -255,7 +289,7 @@ export type AiProvider = "" | "openai" | "anthropic";
 
 export interface AiSettings {
   analysis_mode: AnalysisMode;
-  provider: AiProvider;
+  provider: string;
   base_url: string;
   model: string;
   api_key_configured: boolean;
@@ -264,15 +298,41 @@ export interface AiSettings {
   env_base_url: string;
   env_model: string;
   env_key_configured: boolean;
+  // Semantic-search (embedding) config.
+  embedding_model: string;
+  embedding_enabled: boolean;
 }
 
 export interface AiSettingsInput {
+  // Global behavior toggles only — provider connection is per-profile.
   analysis_mode: AnalysisMode;
-  provider: AiProvider;
+  embedding_model: string;
+}
+
+// ---------------- AI provider profiles ----------------
+
+export type ProviderType = "openai_compatible" | "anthropic" | "rules_only";
+
+export interface ProviderProfile {
+  id: number;
+  label: string;
+  provider_type: ProviderType;
   base_url: string;
   model: string;
+  api_key_configured: boolean;
+  is_active: boolean;
+}
+
+export interface ProviderProfileInput {
+  label: string;
+  provider_type: ProviderType;
+  base_url: string;
   api_key: string;
-  clear_api_key: boolean;
+  model: string;
+}
+
+export interface ProviderModels {
+  models: string[];
 }
 
 // ---------------- AI memory ----------------
@@ -280,4 +340,23 @@ export interface AiSettingsInput {
 export interface AiMemory {
   id: number;
   content: string;
+}
+
+// ---------------- AI chat ----------------
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface CitedEmail {
+  id: number;
+  subject: string;
+  sender: string;
+  date: string | null;
+}
+
+export interface ChatResponse {
+  answer: string;
+  cited_emails: CitedEmail[];
 }

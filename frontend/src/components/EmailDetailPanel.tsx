@@ -103,6 +103,38 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     }
   }
 
+  // P1 feedback loop: correct the AI verdict; the backend stores the
+  // correction and re-queues this sender's other mails for re-analysis.
+  async function handleCorrectCategory(name: string) {
+    if (!email || !name || name === email.category) return;
+    setBusy(true);
+    try {
+      const updated = await api.updateEmailClassification(email.id, { category: name });
+      setEmail((prev) => (prev ? { ...prev, ...updated } : updated));
+      showToast("success", t("detail.correctedToast"));
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleAd() {
+    if (!email || email.is_advertisement === null) return;
+    setBusy(true);
+    try {
+      const updated = await api.updateEmailClassification(email.id, {
+        is_advertisement: !email.is_advertisement,
+      });
+      setEmail((prev) => (prev ? { ...prev, ...updated } : updated));
+      showToast("success", t("detail.correctedToast"));
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleUnsubscribe() {
     if (!email) return;
     setBusy(true);
@@ -318,6 +350,22 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                         <span className={`tag category ${email.category}`}>
                           {catLabel(email.category)}
                         </span>
+                        <select
+                          className="ai-correct-select"
+                          value={email.category}
+                          disabled={busy}
+                          title={t("detail.correctCategory")}
+                          onChange={(e) => handleCorrectCategory(e.target.value)}
+                        >
+                          {!categories.some((c) => c.name === email.category) && (
+                            <option value={email.category}>{email.category}</option>
+                          )}
+                          {categories.map((c) => (
+                            <option key={c.id} value={c.name}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     )}
                     {email.priority_score !== null && email.priority_score !== undefined && (
@@ -331,9 +379,15 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                     {email.is_advertisement !== null && (
                       <div className="ai-cell">
                         <span className="ai-label">{t("detail.ad")}</span>
-                        <span className={`tag ${email.is_advertisement ? "ad" : "not-ad"}`}>
+                        <button
+                          type="button"
+                          className={`tag ${email.is_advertisement ? "ad" : "not-ad"} ai-correct-toggle`}
+                          disabled={busy}
+                          title={t("detail.correctAd")}
+                          onClick={handleToggleAd}
+                        >
                           {email.is_advertisement ? t("misc.yes") : t("misc.no")}
-                        </span>
+                        </button>
                       </div>
                     )}
                     {email.suggested_action && (

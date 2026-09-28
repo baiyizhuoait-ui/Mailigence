@@ -192,6 +192,17 @@ export const api = {
   markEmailRead: (id: number) =>
     request<UnifiedEmail>(`/emails/${id}/read`, { method: "PATCH" }),
 
+  // Correct the AI classification (P1 feedback loop); the backend records the
+  // correction and re-queues this sender's other mails for re-analysis.
+  updateEmailClassification: (
+    id: number,
+    payload: { category?: string; is_advertisement?: boolean },
+  ) =>
+    request<UnifiedEmail>(`/emails/${id}/classification`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
   // ---------------- Ad management ----------------
 
   getAdStats: () => request<AdStats>("/ads/stats"),

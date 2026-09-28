@@ -8,10 +8,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import delete as db_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.classification_feedback import ClassificationFeedback
 from app.models.email import MailDirection, UnifiedEmail
 from app.models.email_account import AuthType, EmailAccount
 from app.schemas.email import (
@@ -262,4 +263,103 @@ async def mark_email_read(email_id: int, db: AsyncSession = Depends(get_db)) -> 
         email.is_read = True
         await db.commit()
         await db.refresh(email)
+    return email
+
+
+class ClassificationUpdate(BaseModel):
+    """User correction of the AI classification (P1 feedback loop)."""
+
+    category: str | None = Field(default=None, min_length=1, max_length=64)
+    is_advertisement: bool | None = None
+
+
+def _sender_email_key(sender: str | None) -> str:
+    """Extract the bare address from ``张工 <zhang@x.com>`` / ``zhang@x.com``."""
+    value = (sender or "").strip()
+    if "<" in value and ">" in value:
+        value = value.split("<", 1)[1].rsplit(">", 1)[0]
+    return value.strip().lower()
+
+
+@router.patch("/{email_id}/classification", response_model=EmailOut)
+async def update_email_classification(
+    email_id: int, payload: ClassificationUpdate, db: AsyncSession = Depends(get_db)
+) -> UnifiedEmail:
+    """Correct an email's AI classification and feed the learning loop.
+
+    Writes the mail + a ``classification_feedback`` row (one per email, last
+    correction wins), then re-queues this sender's other unprocessed mails for
+    re-analysis so the correction propagates (the next analysis injects the
+    recent corrections as few-shot context).
+    """
+    email = await db.get(UnifiedEmail, email_id)
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    if payload.category is None and payload.is_advertisement is None:
+        raise HTTPException(status_code=422, detail="category 或 is_advertisement 至少提供一个")
+
+    # Capture the AI's original verdict BEFORE mutating, for the feedback row.
+    was_category = email.category
+    was_ad = email.is_advertisement
+    changed = False
+    if payload.category is not None and payload.category != email.category:
+        email.category = payload.category.strip()
+        changed = True
+    if payload.is_advertisement is not None and payload.is_advertisement != email.is_advertisement:
+        email.is_advertisement = payload.is_advertisement
+        changed = True
+
+    if not changed:
+        return email
+
+    # Upsert feedback: one row per email — the latest correction replaces any
+    # earlier one for the same mail.
+    await db.execute(
+        db_delete(ClassificationFeedback).where(
+            ClassificationFeedback.email_id == email.id
+        )
+    )
+    db.add(
+        ClassificationFeedback(
+            email_id=email.id,
+            sender=email.sender or "",
+            sender_email=_sender_email_key(email.sender_email or email.sender),
+            subject=email.subject or "",
+            was_category=was_category,
+            corrected_category=email.category,
+            was_ad=was_ad,
+            corrected_ad=email.is_advertisement,
+        )
+    )
+    await db.commit()
+    await db.refresh(email)
+
+    # Targeted re-analysis: reset this sender's other unprocessed mails so
+    # they re-enter the analysis queue and pick up the injected feedback.
+    sender_key = _sender_email_key(email.sender_email or email.sender)
+    if sender_key:
+        requeue = (
+            await db.execute(
+                select(UnifiedEmail.id)
+                .where(
+                    UnifiedEmail.sender_email == sender_key,
+                    UnifiedEmail.id != email.id,
+                    UnifiedEmail.direction == MailDirection.INBOX,
+                    UnifiedEmail.analyzed_at.is_not(None),
+                    UnifiedEmail.handled_at.is_(None),
+                    UnifiedEmail.is_archived.is_(False),
+                )
+                .limit(50)
+            )
+        ).scalars().all()
+        if requeue:
+            await db.execute(
+                update(UnifiedEmail)
+                .where(UnifiedEmail.id.in_(requeue))
+                .values(analyzed_at=None)
+            )
+            await db.commit()
+        from app.services.analysis_service import manager as analysis_manager
+
+        analysis_manager.start(email.account_id)
     return email

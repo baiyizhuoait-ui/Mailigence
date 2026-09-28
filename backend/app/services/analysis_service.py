@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
+from app.models.classification_feedback import ClassificationFeedback
 from app.models.email import UnifiedEmail
 from app.models.email_category import EmailCategory
 from app.services.ai_analyzer import AnalysisResult, analyze_email
@@ -32,6 +33,40 @@ from app.services.categories import list_category_names
 from app.services.memories import get_memory_texts
 
 ANALYSIS_BATCH = 50  # max emails analyzed per background run
+LOW_CONFIDENCE_THRESHOLD = 0.5  # surface these to the UI as "待确认" (P1-5)
+# Below this the model is too unsure to invent a NEW category (falls back to
+# other); reusing an existing one is still fine.
+CATEGORY_INVENTION_THRESHOLD = 0.7
+
+
+async def load_sender_feedback(db: AsyncSession, sender_email: str | None) -> list[dict]:
+    """Recent user corrections for this sender (P1 few-shot injection).
+
+    Returns at most 5 items, newest first, shaped for
+    ``ai_analyzer.analyze_email(feedback=...)``:
+    ``{subject, corrected_category, corrected_ad}``.
+    """
+    if not sender_email:
+        return []
+    rows = (
+        await db.execute(
+            select(ClassificationFeedback)
+            .where(ClassificationFeedback.sender_email == sender_email)
+            .order_by(
+                ClassificationFeedback.created_at.desc(),
+                ClassificationFeedback.id.desc(),
+            )
+            .limit(5)
+        )
+    ).scalars().all()
+    return [
+        {
+            "subject": row.subject or "",
+            "corrected_category": row.corrected_category,
+            "corrected_ad": row.corrected_ad,
+        }
+        for row in rows
+    ]
 
 
 # --- core -------------------------------------------------------------------
@@ -42,14 +77,17 @@ async def run_analysis(
     account_id: Optional[int] = None,
     limit: int = ANALYSIS_BATCH,
     on_progress: Optional[Callable[[int, int], None]] = None,
-) -> tuple[int, int]:
-    """Analyze up to ``limit`` emails that need it. Returns (analyzed, total).
+) -> tuple[int, int, int]:
+    """Analyze up to ``limit`` emails that need it. Returns (analyzed, total,
+    low_confidence).
 
     Two queues are covered:
     * never-analyzed mails (``analyzed_at IS NULL``) — new imports / syncs;
     * uncategorized mails (``category IS NULL``) — e.g. after the user deletes
       a category, those mails re-enter this queue automatically and the AI
       assigns them a fresh classification.
+    ``low_confidence`` counts results whose self-reported confidence is below
+    ``LOW_CONFIDENCE_THRESHOLD`` so the UI can badge them "待确认" (P1-5).
     """
     stmt = select(UnifiedEmail).where(
         (UnifiedEmail.analyzed_at.is_(None))
@@ -64,6 +102,7 @@ async def run_analysis(
     emails = (await db.execute(stmt)).scalars().all()
     total = len(emails)
     analyzed = 0
+    low_confidence = 0
 
     # Resolve AI config once per batch (DB settings + .env).
     cfg = await load_ai_config(db)
@@ -74,11 +113,19 @@ async def run_analysis(
     memories = await get_memory_texts(db)
 
     for email in emails:
+        # User corrections for this sender (P1): few-shot context that lets
+        # the model learn from its own past mistakes. Their presence also
+        # disables the deterministic fast-path inside analyze_email.
+        feedback = await load_sender_feedback(db, email.sender_email)
         # Dedup cache only applies to never-analyzed mail (cost control for
         # bulk marketing with identical subjects). Re-queued mails — ones that
         # were analyzed before but lost their category to a category delete —
         # must get a fresh LLM classification instead of copying the stale one.
-        cached = await _find_cached(db, email) if email.analyzed_at is None else None
+        cached = (
+            await _find_cached(db, email)
+            if email.analyzed_at is None and not feedback
+            else None
+        )
         if cached is not None:
             result = AnalysisResult(
                 category=cached.category or "other",
@@ -95,9 +142,20 @@ async def run_analysis(
                 config=cfg,
                 categories=category_names,
                 memories=memories,
+                sender=email.sender or email.sender_email,
+                feedback=feedback or None,
             )
+            is_low = (
+                result.confidence is not None
+                and result.confidence < LOW_CONFIDENCE_THRESHOLD
+            )
+            low_confidence += 1 if is_low else 0
             category_names = await _register_categories(
-                db, category_names, [result.category]
+                db,
+                category_names,
+                [result.category],
+                allow_new=result.confidence is None
+                or result.confidence >= CATEGORY_INVENTION_THRESHOLD,
             )
 
         email.category = result.category
@@ -112,15 +170,22 @@ async def run_analysis(
         if on_progress:
             on_progress(analyzed, total)
 
-    return analyzed, total
+    return analyzed, total, low_confidence
 
 
 async def _register_categories(
-    db: AsyncSession, known: list[str], names: list[str]
+    db: AsyncSession,
+    known: list[str],
+    names: list[str],
+    *,
+    allow_new: bool = True,
 ) -> list[str]:
     """Auto-register any category name the AI introduced that isn't known yet.
 
     Mutates ``known`` (returns it) so the batch keeps using the updated list.
+    ``allow_new=False`` (low-confidence analysis) falls back to ``other``
+    instead of polluting the category list with a guess — invented categories
+    must be deliberate, keeping ``other`` rare-but-honest.
     """
     from sqlalchemy.exc import IntegrityError
 
@@ -128,6 +193,15 @@ async def _register_categories(
         name = (name or "").strip()
         if not name or name in known:
             continue
+        if not allow_new:
+            fallback = "other" if "other" in known else None
+            if fallback is None:
+                # ``other`` missing on this deployment — register nothing and
+                # let the email keep the raw label rather than inventing one.
+                continue
+            name = fallback
+            if name in known:
+                continue
         known.append(name)
         db.add(EmailCategory(name=name, label=name, is_system=False))
         try:
@@ -197,7 +271,9 @@ class AnalysisManager:
         for other in self._tasks.values():
             if not other.done():
                 return False
-        self._status[key] = {"running": True, "total": 0, "analyzed": 0, "error": ""}
+        self._status[key] = {
+            "running": True, "total": 0, "analyzed": 0, "low_confidence": 0, "error": ""
+        }
 
         def on_progress(analyzed: int, total: int) -> None:
             st = self._status.get(key)
@@ -225,13 +301,14 @@ class AnalysisManager:
         key = account_id or 0
         try:
             async with SessionLocal() as db:
-                analyzed, total = await run_analysis(
+                analyzed, total, low_confidence = await run_analysis(
                     db, account_id=account_id, limit=ANALYSIS_BATCH, on_progress=on_progress
                 )
             self._status[key] = {
                 "running": False,
                 "total": total,
                 "analyzed": analyzed,
+                "low_confidence": low_confidence,
                 "error": "",
             }
         except Exception as exc:

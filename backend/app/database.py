@@ -63,6 +63,7 @@ async def init_db() -> None:
         ai_provider_profile,
         app_setting,
         blocked_sender,
+        classification_feedback,
         email,
         email_account,
         email_category,

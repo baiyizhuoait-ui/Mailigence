@@ -264,8 +264,9 @@ async def _analyze_with_llm(
             "summary": (e.summary or "")[:150],
             # The full body lives in the mailbox; the persisted snippet is the
             # best local proxy for schedule extraction (dates/times usually
-            # live in the body, not in the AI summary).
-            "body": (e.body_snippet or "")[:300],
+            # live in the body, not in the AI summary). 800 chars (P3) keeps
+            # the common "time/place/agenda" block intact.
+            "body": (e.body_snippet or "")[:800],
             "received_at": e.received_at.isoformat() if e.received_at else "",
         })
     user_content = json.dumps(mail_list, ensure_ascii=False)

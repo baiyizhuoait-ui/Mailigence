@@ -31,8 +31,11 @@ SYSTEM_PROMPT = """你是用户的邮件助理。你只能根据下面提供的�
 USER_PROMPT_TEMPLATE = """用户问题：{query}\n\n（如有统计数据）相关统计：{stats_context}\n\n相关邮件片段：\n{fragments}\n\n对话历史（如有，最近3轮）：\n{history}\n\n请回答用户问题。"""
 
 CITED_MARKER = "---CITED_IDS---"
-RETRIEVAL_LIMIT = 15
-SNIPPET_MAX_CHARS = 200
+# P3 tuning: 12 fragments × 600 chars gives the model enough body context to
+# answer "what did X say about Y" without a second fetch, while 12 (down from
+# 15) keeps the total prompt budget flat.
+RETRIEVAL_LIMIT = 12
+SNIPPET_MAX_CHARS = 600
 HISTORY_ROUNDS = 3
 # Thinking models spend many tokens on reasoning before answering; give them
 # room plus time so the answer and the ---CITED_IDS--- trailer survive.

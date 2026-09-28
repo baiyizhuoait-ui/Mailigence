@@ -26,8 +26,10 @@ _log = logging.getLogger(__name__)
 
 # Fallback model name for OpenAI-compatible / Ollama endpoints.
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
-# Subject + body text fed to the embedder (summary-level is enough).
-EMBED_INPUT_MAX_CHARS = 1000
+# Subject + body text fed to the embedder. 2000 chars (P3) captures the
+# meaningful body head instead of summary-level only; new/updated mails are
+# embedded with the longer input (existing vectors refresh via re-sync).
+EMBED_INPUT_MAX_CHARS = 2000
 # Emails embedded per background run.
 BACKFILL_BATCH = 20
 # Network timeout for one embeddings call.

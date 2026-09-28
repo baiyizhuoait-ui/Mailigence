@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     # pgvector column dimension — must match the embedding model in use
     # (text-embedding-3-small = 1536; nomic-embed-text via Ollama = 768).
     embedding_dim: int = 1536
+    # Accuracy tuning. AI_MAX_BODY_CHARS caps the body text fed to the LLM
+    # (0 = auto: 2500 cloud / 1200 local). AI_NUM_CTX sets Ollama's context
+    # window explicitly (0 = leave the server default; raise it if local
+    # models return truncated/garbage JSON on long prompts).
+    ai_max_body_chars: int = 0
+    ai_num_ctx: int = 0
+    # Deterministic fast-path (P2): unambiguous bulk mail / OTP / calendar
+    # invites skip the LLM entirely (cost + stability). Set 0/false to disable.
+    ai_skip_deterministic: bool = True
 
     # OAuth2 providers
     google_oauth_client_id: str = ""

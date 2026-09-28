@@ -1155,6 +1155,22 @@ button {
   font-size: 13px;
 }
 
+/* P1 feedback loop: inline classification-correction controls. */
+.ai-correct-select {
+  max-width: 110px;
+  font-size: 12px;
+  padding: 1px 4px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.ai-correct-toggle {
+  cursor: pointer;
+  font: inherit;
+}
+
 .hint {
   font-size: 11.5px;
   color: var(--text-faint);

@@ -169,47 +169,15 @@ async def auto_handle_emails(db: AsyncSession) -> int:
     return count
 
 
-async def get_pending_emails(
-    db: AsyncSession, limit: int = 30
-) -> list[UnifiedEmail]:
-    """Fetch emails that need user action and haven't been handled yet.
-
-    Filters:
-    - direction = INBOX
-    - handled_at IS NULL (not yet dismissed from dashboard)
-    - suggested_action IN ('reply', 'review')
-    - not advertisement
-    Sorted by priority_score DESC, then received_at DESC.
-    """
-    stmt = (
-        select(UnifiedEmail)
-        .where(
-            UnifiedEmail.direction == MailDirection.INBOX,
-            UnifiedEmail.handled_at.is_(None),
-            UnifiedEmail.suggested_action.in_(["reply", "review"]),
-            UnifiedEmail.is_advertisement.is_(False)
-            | (UnifiedEmail.is_advertisement.is_(None)),
-        )
-        .order_by(
-            UnifiedEmail.priority_score.desc().nullslast(),
-            UnifiedEmail.received_at.desc().nullslast(),
-        )
-        .limit(limit)
-    )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
-
-
 async def get_schedule_candidates(
     db: AsyncSession, limit: int = 30
 ) -> list[UnifiedEmail]:
     """Fetch emails likely to contain schedule info (meetings/deadlines).
 
-    Unlike ``get_pending_emails`` (reply/review only), this scans the last
-    ``SCHEDULE_WINDOW_DAYS`` days of non-ad, non-archived, unhandled inbox
-    mail regardless of the suggested action — meeting invites and calendar
-    notifications are usually classified as 'notice', not 'reply', and
-    would otherwise never reach the schedule extractor.
+    Scans the last ``SCHEDULE_WINDOW_DAYS`` days of non-ad, non-archived,
+    unhandled inbox mail regardless of the suggested action — meeting invites
+    and calendar notifications are usually classified as 'notice', not
+    'reply', and would otherwise never reach the schedule extractor.
     """
     since = datetime.now(timezone.utc) - timedelta(days=SCHEDULE_WINDOW_DAYS)
     stmt = (

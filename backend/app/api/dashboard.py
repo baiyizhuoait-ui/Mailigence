@@ -21,7 +21,7 @@ from app.services import mail_sync
 from app.services.schedule_analyzer import (
     analyze_schedule,
     auto_handle_emails,
-    get_pending_emails,
+    get_schedule_candidates,
     mark_handled,
 )
 
@@ -73,10 +73,14 @@ async def dashboard_pending(
     account_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
 ) -> list[UnifiedEmail]:
-    """Return unhandled emails needing action (reply/review), sorted by priority."""
+    """Return unhandled recent-window emails (incl. notice) by priority.
+
+    Widened from reply/review to the same window as the AI advisor so every
+    priority-queue suggestion resolves to a displayable email in the UI.
+    """
     # Auto-handle stale emails first so they don't appear in the pending list.
     await auto_handle_emails(db)
-    emails = await get_pending_emails(db, limit=30)
+    emails = await get_schedule_candidates(db, limit=30)
     if account_id is not None:
         emails = [e for e in emails if e.account_id == account_id]
     return emails

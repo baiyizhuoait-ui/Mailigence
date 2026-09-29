@@ -270,6 +270,7 @@ export interface ScheduleItem {
 
 export interface PriorityQueueItem {
   email_id: number;
+  action?: string; // AI-suggested concrete action (verb-first), e.g. "回复确认周三15:00面试"
   reason: string;
   urgency: "high" | "medium" | "low";
   estimated_minutes: number;
@@ -280,6 +281,10 @@ export interface ScheduleResult {
   priority_queue: PriorityQueueItem[];
   daily_brief: string;
   source: "ai" | "rules";
+  /** Hash of the analysis-window state; send back via ?fp= for instant refresh. */
+  fingerprint?: string;
+  /** True when the server confirmed nothing changed for the given fp. */
+  unchanged?: boolean;
 }
 
 // ---- AI settings (settings page) ----

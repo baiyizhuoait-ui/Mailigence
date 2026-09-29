@@ -3520,6 +3520,104 @@ button {
   color: var(--text-dim);
 }
 
+/* Merged AI advisor card (brief + schedule in one board) */
+.dash-advisor-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dash-advisor-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.dash-advisor-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.dash-advisor-chip:hover {
+  border-color: var(--accent);
+}
+
+.dash-advisor-chip-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.dash-advisor-chip-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-advisor-chip-time {
+  font-size: 12px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+/* Ad management: unblocked / blocked separation */
+.ad-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ad-group-label.is-blocked-label {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-faint);
+}
+
+.ad-row.is-blocked {
+  opacity: 0.5;
+}
+
+.ad-row.is-blocked .email-subject {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-faint);
+}
+
+.ad-blocked-tag {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
 /* Priority queue card (right column) */
 .dash-queue-card {
   background: var(--panel);

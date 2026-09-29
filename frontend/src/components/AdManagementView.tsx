@@ -76,6 +76,12 @@ export function AdManagementView() {
   const allSelected = ads.length > 0 && ads.every((m) => selectedIds.has(m.id));
   const someSelected = ads.some((m) => selectedIds.has(m.id)) && !allSelected;
 
+  // Separate unblocked ads from ads whose sender is already blocked —
+  // blocked ones render last, dimmed, and can't be blocked again.
+  const blockedEmailSet = new Set(blocked.map((b) => b.sender_email));
+  const activeAds = ads.filter((m) => !blockedEmailSet.has(m.sender_email));
+  const blockedAds = ads.filter((m) => blockedEmailSet.has(m.sender_email));
+
   function toggleOne(id: number) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -170,6 +176,68 @@ export function AdManagementView() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function renderAdRow(m: UnifiedEmail, isBlocked: boolean) {
+    const senderLabel = m.sender || m.sender_email || t("misc.unknownSender");
+    const checked = selectedIds.has(m.id);
+    return (
+      <li
+        key={m.id}
+        className={`ad-row ${checked ? "selected" : ""} ${isBlocked ? "is-blocked" : ""}`}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggleOne(m.id)}
+          className="ad-check"
+        />
+        <div className="ad-row-main">
+          <div className="ad-row-top">
+            <span className={`platform-tag ${m.platform}`}>
+              {PLATFORM_LABEL[m.platform] ?? m.platform}
+            </span>
+            <span className="email-sender">{senderLabel}</span>
+            {isBlocked && (
+              <span className="ad-blocked-tag">{t("ads.blockedBadge")}</span>
+            )}
+            <span className="email-time mono">
+              {m.received_at
+                ? new Date(m.received_at).toLocaleString("zh-CN")
+                : ""}
+            </span>
+          </div>
+          <div className="email-subject">{m.subject || t("misc.noSubject")}</div>
+          {m.category && (
+            <span className={`tag category ${m.category}`}>
+              {catLabel(m.category)}
+            </span>
+          )}
+        </div>
+        <div className="ad-row-actions">
+          {isBlocked ? (
+            <button className="btn small ghost" disabled>
+              {t("ads.blockedBadge")}
+            </button>
+          ) : (
+            <button
+              className="btn small warn"
+              onClick={() => handleBlock(m.id, senderLabel)}
+              disabled={busy}
+            >
+              {t("ads.blockSender")}
+            </button>
+          )}
+          <button
+            className="btn small info"
+            onClick={() => handleUnsubscribe(m.id)}
+            disabled={busy}
+          >
+            {t("ads.unsubscribe")}
+          </button>
+        </div>
+      </li>
+    );
   }
 
   return (
@@ -270,57 +338,30 @@ export function AdManagementView() {
               </p>
             </div>
           ) : (
-            <ul className="ad-list">
-              {ads.map((m) => {
-                const senderLabel = m.sender || m.sender_email || t("misc.unknownSender");
-                const checked = selectedIds.has(m.id);
-                return (
-                  <li key={m.id} className={`ad-row ${checked ? "selected" : ""}`}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleOne(m.id)}
-                      className="ad-check"
-                    />
-                    <div className="ad-row-main">
-                      <div className="ad-row-top">
-                        <span className={`platform-tag ${m.platform}`}>
-                          {PLATFORM_LABEL[m.platform] ?? m.platform}
-                        </span>
-                        <span className="email-sender">{senderLabel}</span>
-                        <span className="email-time mono">
-                          {m.received_at
-                            ? new Date(m.received_at).toLocaleString("zh-CN")
-                            : ""}
-                        </span>
-                      </div>
-                      <div className="email-subject">{m.subject || t("misc.noSubject")}</div>
-                      {m.category && (
-                        <span className={`tag category ${m.category}`}>
-                          {catLabel(m.category)}
-                        </span>
-                      )}
-                    </div>
-                    <div className="ad-row-actions">
-                      <button
-                        className="btn small warn"
-                        onClick={() => handleBlock(m.id, senderLabel)}
-                        disabled={busy}
-                      >
-                        {t("ads.blockSender")}
-                      </button>
-                      <button
-                        className="btn small info"
-                        onClick={() => handleUnsubscribe(m.id)}
-                        disabled={busy}
-                      >
-                        {t("ads.unsubscribe")}
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+            <>
+              {activeAds.length > 0 && (
+                <>
+                  <div className="ad-group-label">
+                    {t("ads.unblockedSection")}
+                    <span className="mono">{activeAds.length}</span>
+                  </div>
+                  <ul className="ad-list">
+                    {activeAds.map((m) => renderAdRow(m, false))}
+                  </ul>
+                </>
+              )}
+              {blockedAds.length > 0 && (
+                <>
+                  <div className="ad-group-label is-blocked-label">
+                    {t("ads.blockedSection")}
+                    <span className="mono">{blockedAds.length}</span>
+                  </div>
+                  <ul className="ad-list">
+                    {blockedAds.map((m) => renderAdRow(m, true))}
+                  </ul>
+                </>
+              )}
+            </>
           )}
         </section>
       ) : (

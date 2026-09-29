@@ -23,8 +23,6 @@ const TYPE_ICONS: Record<string, string> = {
   reminder: "🔔",
 };
 
-const GROUP_ORDER = ["today", "tomorrow", "this_week", "upcoming"];
-
 export function DashboardView() {
   const { t, lang } = useI18n();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -39,27 +37,36 @@ export function DashboardView() {
   const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
   const scheduleTimer = useRef<ReturnType<typeof setInterval> | undefined>();
   const prevSummaryRef = useRef<DashboardSummary | null>(null);
+  // Fingerprint of the advisor data we last rendered. Sent back on every
+  // fetch so the server can skip the LLM entirely when nothing changed.
+  const scheduleFp = useRef<string | null>(null);
+
+  // Fetch the AI advisor board (brief + schedule merged).
+  const fetchSchedule = useCallback(async () => {
+    const sc = await api.getDashboardSchedule(scheduleFp.current ?? undefined);
+    scheduleFp.current = sc.fingerprint ?? scheduleFp.current;
+    if (!sc.unchanged) setSchedule(sc);
+  }, []);
 
   const fullRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [s, p, sc] = await Promise.all([
+      const [s, p] = await Promise.all([
         api.getDashboardSummary(),
         api.getDashboardPending(),
-        api.getDashboardSchedule(),
       ]);
       setSummary(s);
       prevSummaryRef.current = s;
       setPending(p);
-      setSchedule(sc);
       setLastUpdated(new Date());
+      await fetchSchedule();
     } catch {
       /* ignore */
     } finally {
       setRefreshing(false);
       setLoading(false);
     }
-  }, []);
+  }, [fetchSchedule]);
 
   // Force sync: pull new mail from all accounts, then refresh dashboard.
   const forceSyncAndRefresh = useCallback(async () => {
@@ -114,22 +121,16 @@ export function DashboardView() {
   }, [quickPoll]);
 
   useEffect(() => {
-    // Poll the schedule every minute; the backend cache (60s) is invalidated
-    // as soon as a batch of AI analysis finishes, so fresh results land here
-    // within one poll after analysis completes.
-    scheduleTimer.current = setInterval(
-      async () => {
-        try {
-          const sc = await api.getDashboardSchedule();
-          setSchedule(sc);
-        } catch {
-          /* ignore */
-        }
-      },
-      60_000,
-    );
+    // Fingerprint-gated: when the mail window is unchanged this costs the
+    // server one cheap DB query and zero LLM calls, so a short interval
+    // keeps the advisor board fresh for free.
+    scheduleTimer.current = setInterval(() => {
+      fetchSchedule().catch(() => {
+        /* ignore */
+      });
+    }, 30_000);
     return () => clearInterval(scheduleTimer.current);
-  }, []);
+  }, [fetchSchedule]);
 
   const handleEmail = useCallback(async (emailId: number) => {
     setHandlingIds((prev) => new Set(prev).add(emailId));
@@ -163,14 +164,6 @@ export function DashboardView() {
     ?.map((q) => ({ ...q, email: emailMap.get(q.email_id) }))
     .filter((q) => q.email) ?? [];
 
-  // Group schedule items.
-  const groupedSchedule = GROUP_ORDER.map((group) => ({
-    group,
-    items: (schedule?.schedule_items ?? []).filter(
-      (item) => (item.group || "upcoming") === group,
-    ),
-  })).filter((g) => g.items.length > 0);
-
   if (loading) {
     return <div className="loading">{t("misc.loading")}</div>;
   }
@@ -187,19 +180,48 @@ export function DashboardView() {
     <div className="dashboard-view">
       {/* Two-column layout */}
       <div className="dash-grid">
-        {/* Left column: Brief + Schedule */}
+        {/* Left column: merged AI advisor (brief + schedule) */}
         <div className="dash-left">
-          {/* AI Brief */}
           {schedule && (
-            <div className="dash-brief-card">
+            <div className="dash-brief-card dash-advisor-card">
               <div className="dash-brief-header">
                 <span className="dash-brief-icon">✦</span>
-                <span className="dash-brief-title">{t("dash.dailyBrief")}</span>
+                <span className="dash-brief-title">{t("dash.aiAdvisor")}</span>
                 <span className={`dash-source-badge ${schedule.source}`}>
                   {schedule.source === "ai" ? "AI" : "Rules"}
                 </span>
               </div>
               <p className="dash-brief-text">{schedule.daily_brief}</p>
+
+              {/* Upcoming time-sensitive items as compact chips */}
+              {(schedule.schedule_items?.length ?? 0) > 0 && (
+                <div className="dash-advisor-schedule">
+                  {schedule.schedule_items.map((item, i) => (
+                    <button
+                      key={i}
+                      className="dash-advisor-chip"
+                      onClick={() => setSelectedEmailId(item.email_id)}
+                      title={item.title}
+                    >
+                      <span className="dash-advisor-chip-icon">
+                        {TYPE_ICONS[item.type] || "📋"}
+                      </span>
+                      <span className="dash-advisor-chip-title">
+                        {item.title}
+                      </span>
+                      {(item.date || item.time) && (
+                        <span className="dash-advisor-chip-time mono">
+                          {[item.date, item.time].filter(Boolean).join(" ")}
+                        </span>
+                      )}
+                      <span className={`dash-schedule-type ${item.type}`}>
+                        {t(`dash.type.${item.type}`)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {lastUpdated && (
                 <div className="dash-last-updated">
                   {t("dash.lastUpdated")}: {lastUpdated.toLocaleTimeString(lang === "zh" ? "zh-CN" : "en-US")}
@@ -207,42 +229,6 @@ export function DashboardView() {
               )}
             </div>
           )}
-
-          {/* Schedule timeline */}
-          <div className="dash-schedule-card">
-            <h3 className="dash-section-title">{t("dash.schedule")}</h3>
-            {groupedSchedule.length === 0 ? (
-              <div className="dash-schedule-empty">{t("dash.noSchedule")}</div>
-            ) : (
-              <div className="dash-schedule-groups">
-                {groupedSchedule.map(({ group, items }) => (
-                  <div key={group} className="dash-schedule-group">
-                    <div className="dash-schedule-group-label">
-                      {t(`dash.group.${group}`)}
-                    </div>
-                    {items.map((item, i) => (
-                      <div key={i} className="dash-schedule-item">
-                        <span className="dash-schedule-icon">
-                          {TYPE_ICONS[item.type] || "📋"}
-                        </span>
-                        <div className="dash-schedule-content">
-                          <div className="dash-schedule-title">{item.title}</div>
-                          {(item.date || item.time) && (
-                            <div className="dash-schedule-time">
-                              {item.date} {item.time}
-                            </div>
-                          )}
-                        </div>
-                        <span className={`dash-schedule-type ${item.type}`}>
-                          {t(`dash.type.${item.type}`)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Right column: Stats + Priority Queue */}
@@ -320,7 +306,12 @@ export function DashboardView() {
                           >
                             {t(`dash.urgency.${item.urgency}`)}
                           </span>
-                          <span className="dash-reason-text">{item.reason}</span>
+                          <span
+                            className="dash-reason-text"
+                            title={item.reason}
+                          >
+                            {item.action || item.reason}
+                          </span>
                           <span className="dash-est-time">
                             ~{item.estimated_minutes}{t("dash.min")}
                           </span>

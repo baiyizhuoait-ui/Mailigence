@@ -301,8 +301,10 @@ export const api = {
   getDashboardSummary: () =>
     request<DashboardSummary>("/dashboard/summary"),
 
-  getDashboardSchedule: () =>
-    request<ScheduleResult>("/dashboard/schedule"),
+  getDashboardSchedule: (fp?: string) =>
+    request<ScheduleResult>(
+      `/dashboard/schedule${fp ? `?fp=${encodeURIComponent(fp)}` : ""}`,
+    ),
 
   getDashboardPending: () =>
     request<UnifiedEmail[]>("/dashboard/pending"),

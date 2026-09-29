@@ -85,20 +85,23 @@ async def dashboard_pending(
 @router.get("/schedule")
 async def dashboard_schedule(
     account_id: Optional[int] = None,
+    fp: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """AI-analyzed schedule & priority queue for pending emails.
+    """AI-analyzed schedule & priority queue for recent window emails.
 
-    Auto-handles stale emails first (replied, read+FYI, no-action),
-    then returns the analysis. Cached for 1 minute server-side and
-    invalidated as soon as a batch of AI analysis finishes.
+    Clients pass back the ``fingerprint`` they last rendered (``fp``).
+    When the analysis window hasn't changed since, the server answers
+    from cache without calling the LLM — refresh stays instant & free.
     """
-    result = await analyze_schedule(db, account_id)
+    result = await analyze_schedule(db, account_id, client_fp=fp)
     return {
         "schedule_items": result.schedule_items,
         "priority_queue": result.priority_queue,
         "daily_brief": result.daily_brief,
         "source": result.source,
+        "fingerprint": result.fingerprint,
+        "unchanged": bool(fp is not None and fp == result.fingerprint),
     }
 
 

@@ -84,6 +84,13 @@ LOCAL_RETRIEVAL_LIMIT = 6
 LOCAL_SNIPPET_MAX_CHARS = 300
 LOCAL_MAX_TOKENS = 1024
 HISTORY_ROUNDS = 3
+# History budget: cap each turn and the total so long conversations can't
+# blow the context window (answers can be 500+ chars each; 3 unbounded
+# rounds already exceed a 4k local window together with fragments).
+HISTORY_TURN_MAX_CLOUD = 600
+HISTORY_TURN_MAX_LOCAL = 300
+HISTORY_TOTAL_MAX_CLOUD = 2200
+HISTORY_TOTAL_MAX_LOCAL = 1000
 # Thinking models spend many tokens on reasoning before answering; give them
 # room plus time so the answer and the ---CITED_IDS--- trailer survive.
 MAX_TOKENS = 2048
@@ -424,6 +431,8 @@ async def chat_qa(
         fragments = "（无命中——请优先依据概况和重要邮件列表回答）"
 
     if history:
+        turn_max = HISTORY_TURN_MAX_LOCAL if local else HISTORY_TURN_MAX_CLOUD
+        total_max = HISTORY_TOTAL_MAX_LOCAL if local else HISTORY_TOTAL_MAX_CLOUD
         lines = []
         for item in history[-HISTORY_ROUNDS:]:
             if not isinstance(item, dict):
@@ -431,9 +440,12 @@ async def chat_qa(
             role = item.get("role")
             content = str(item.get("content") or "")
             if role == "user":
-                lines.append(f"user: {content}")
+                lines.append(f"user: {content[:turn_max]}")
             else:
-                lines.append(f"assistant: {content}")
+                lines.append(f"assistant: {content[:turn_max]}")
+        # Prefer recent turns: drop oldest until under the total budget.
+        while len(lines) > 1 and sum(len(line) for line in lines) > total_max:
+            lines.pop(0)
         history_text = "\n".join(lines) or "（无）"
     else:
         history_text = "（无）"

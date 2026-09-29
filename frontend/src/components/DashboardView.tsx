@@ -34,11 +34,11 @@ export function DashboardView() {
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [lastMailAt, setLastMailAt] = useState<string | null>(null);
   const [handlingIds, setHandlingIds] = useState<Set<number>>(new Set());
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
   const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
   const scheduleTimer = useRef<ReturnType<typeof setInterval> | undefined>();
+  const prevSummaryRef = useRef<DashboardSummary | null>(null);
 
   const fullRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -49,10 +49,10 @@ export function DashboardView() {
         api.getDashboardSchedule(),
       ]);
       setSummary(s);
+      prevSummaryRef.current = s;
       setPending(p);
       setSchedule(sc);
       setLastUpdated(new Date());
-      setLastMailAt(s.last_mail_at);
     } catch {
       /* ignore */
     } finally {
@@ -76,16 +76,27 @@ export function DashboardView() {
   const quickPoll = useCallback(async () => {
     try {
       const s = await api.getDashboardSummary();
+      const prev = prevSummaryRef.current;
+      prevSummaryRef.current = s;
       setSummary(s);
-      if (lastMailAt && s.last_mail_at && s.last_mail_at !== lastMailAt) {
+      // Refresh the full view when anything the dashboard shows changed —
+      // not only when new mail arrived. AI analysis finishing also changes
+      // categories/counts without touching last_mail_at, so comparing only
+      // last_mail_at left the list stale until the next new mail.
+      if (
+        prev &&
+        (s.pending_count !== prev.pending_count ||
+          s.urgent_count !== prev.urgent_count ||
+          s.unread_count !== prev.unread_count ||
+          s.today_count !== prev.today_count ||
+          s.last_mail_at !== prev.last_mail_at)
+      ) {
         await fullRefresh();
-      } else {
-        setLastMailAt(s.last_mail_at);
       }
     } catch {
       /* ignore */
     }
-  }, [lastMailAt, fullRefresh]);
+  }, [fullRefresh]);
 
   useEffect(() => {
     fullRefresh();
@@ -103,6 +114,9 @@ export function DashboardView() {
   }, [quickPoll]);
 
   useEffect(() => {
+    // Poll the schedule every minute; the backend cache (60s) is invalidated
+    // as soon as a batch of AI analysis finishes, so fresh results land here
+    // within one poll after analysis completes.
     scheduleTimer.current = setInterval(
       async () => {
         try {
@@ -112,7 +126,7 @@ export function DashboardView() {
           /* ignore */
         }
       },
-      3 * 60 * 1000,
+      60_000,
     );
     return () => clearInterval(scheduleTimer.current);
   }, []);

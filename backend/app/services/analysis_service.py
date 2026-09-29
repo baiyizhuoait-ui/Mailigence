@@ -6,9 +6,10 @@
   category delete are automatically re-classified.
 * Dedup cache: if a *previously analyzed* email from the same sender with the
   same subject exists, its analysis is reused — so bulk marketing mail with
-  identical subjects doesn't re-invoke the LLM (cost control per spec).
-  Cache is only applied to never-analyzed mail; re-queued (previously analyzed)
-  mail always gets a fresh classification.
+  identical subjects doesn't re-invoke the LLM. OFF by default (AI mode means
+  always calling the AI); enable with ``AI_DEDUP_CACHE=1``. Cache is only
+  applied to never-analyzed mail; re-queued (previously analyzed) mail always
+  gets a fresh classification.
 * ``AnalysisManager`` runs the batch as an asyncio background task with an
   in-memory status dict the frontend can poll. Triggered automatically when an
   import completes, on category delete, by the periodic sweep in main.py, and
@@ -23,6 +24,7 @@ from typing import Callable, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models.classification_feedback import ClassificationFeedback
 from app.models.email import UnifiedEmail
@@ -32,41 +34,14 @@ from app.services.ai_config import load_ai_config
 from app.services.categories import list_category_names
 from app.services.memories import get_memory_texts
 
-ANALYSIS_BATCH = 50  # max emails analyzed per background run
+# Max emails analyzed per background run. Large on purpose: the batch now
+# calls the LLM in parallel (AI_CONCURRENCY) instead of serially, so even a
+# few hundred pending mails drain in roughly one request-round-trip.
+ANALYSIS_BATCH = 200
 LOW_CONFIDENCE_THRESHOLD = 0.5  # surface these to the UI as "待确认" (P1-5)
 # Below this the model is too unsure to invent a NEW category (falls back to
 # other); reusing an existing one is still fine.
 CATEGORY_INVENTION_THRESHOLD = 0.7
-
-
-async def load_sender_feedback(db: AsyncSession, sender_email: str | None) -> list[dict]:
-    """Recent user corrections for this sender (P1 few-shot injection).
-
-    Returns at most 5 items, newest first, shaped for
-    ``ai_analyzer.analyze_email(feedback=...)``:
-    ``{subject, corrected_category, corrected_ad}``.
-    """
-    if not sender_email:
-        return []
-    rows = (
-        await db.execute(
-            select(ClassificationFeedback)
-            .where(ClassificationFeedback.sender_email == sender_email)
-            .order_by(
-                ClassificationFeedback.created_at.desc(),
-                ClassificationFeedback.id.desc(),
-            )
-            .limit(5)
-        )
-    ).scalars().all()
-    return [
-        {
-            "subject": row.subject or "",
-            "corrected_category": row.corrected_category,
-            "corrected_ad": row.corrected_ad,
-        }
-        for row in rows
-    ]
 
 
 # --- core -------------------------------------------------------------------
@@ -112,20 +87,76 @@ async def run_analysis(
     # User's distilled preferences (AI memory) injected into the LLM prompt.
     memories = await get_memory_texts(db)
 
-    for email in emails:
-        # User corrections for this sender (P1): few-shot context that lets
-        # the model learn from its own past mistakes. Their presence also
-        # disables the deterministic fast-path inside analyze_email.
-        feedback = await load_sender_feedback(db, email.sender_email)
-        # Dedup cache only applies to never-analyzed mail (cost control for
-        # bulk marketing with identical subjects). Re-queued mails — ones that
-        # were analyzed before but lost their category to a category delete —
-        # must get a fresh LLM classification instead of copying the stale one.
-        cached = (
-            await _find_cached(db, email)
-            if email.analyzed_at is None and not feedback
-            else None
+    # Bulk-prefetch user corrections (P1) for every sender in the batch with
+    # ONE query, so the parallel LLM phase below never touches the DB. Keep at
+    # most 5 per sender (rows arrive newest-first).
+    sender_emails = {e.sender_email for e in emails if e.sender_email}
+    feedback_map: dict[str, list[dict]] = {}
+    if sender_emails:
+        rows = (
+            await db.execute(
+                select(ClassificationFeedback)
+                .where(ClassificationFeedback.sender_email.in_(sender_emails))
+                .order_by(
+                    ClassificationFeedback.created_at.desc(),
+                    ClassificationFeedback.id.desc(),
+                )
+            )
+        ).scalars().all()
+        for row in rows:
+            bucket = feedback_map.setdefault(row.sender_email, [])
+            if len(bucket) < 5:
+                bucket.append({
+                    "subject": row.subject or "",
+                    "corrected_category": row.corrected_category,
+                    "corrected_ad": row.corrected_ad,
+                })
+
+    # Optional dedup cache (cost control, off by default). Only applies to
+    # never-analyzed mail without corrections; re-queued mails always get a
+    # fresh LLM classification instead of copying the stale one.
+    cached_map: dict[int, UnifiedEmail] = {}
+    if settings.ai_dedup_cache:
+        for email in emails:
+            if email.analyzed_at is None and not feedback_map.get(email.sender_email):
+                cached = await _find_cached(db, email)
+                if cached is not None:
+                    cached_map[email.id] = cached
+
+    # --- parallel LLM phase (pure HTTP calls, no DB session usage) ----------
+    results: dict[int, AnalysisResult] = {}
+    failures: list[str] = []
+    to_llm = [e for e in emails if e.id not in cached_map]
+    sem = asyncio.Semaphore(max(1, settings.ai_concurrency))
+
+    async def _one(email: UnifiedEmail) -> tuple[int, AnalysisResult]:
+        feedback = feedback_map.get(email.sender_email) or None
+        async with sem:
+            r = await analyze_email(
+                email.subject,
+                email.body_snippet,
+                email.raw_headers,
+                config=cfg,
+                categories=category_names,
+                memories=memories,
+                sender=email.sender or email.sender_email,
+                feedback=feedback,
+            )
+        return email.id, r
+
+    if to_llm:
+        outcomes = await asyncio.gather(
+            *(_one(e) for e in to_llm), return_exceptions=True
         )
+        for email, out in zip(to_llm, outcomes):
+            if isinstance(out, Exception):
+                failures.append(f"{(email.subject or '')[:50]}: {out}")
+            else:
+                results[out[0]] = out[1]
+
+    # --- sequential persist phase (DB writes + per-email progress) ----------
+    for email in emails:
+        cached = cached_map.get(email.id)
         if cached is not None:
             result = AnalysisResult(
                 category=cached.category or "other",
@@ -135,16 +166,9 @@ async def run_analysis(
                 suggested_action=cached.suggested_action or "note",
             )
         else:
-            result = await analyze_email(
-                email.subject,
-                email.body_snippet,
-                email.raw_headers,
-                config=cfg,
-                categories=category_names,
-                memories=memories,
-                sender=email.sender or email.sender_email,
-                feedback=feedback or None,
-            )
+            result = results.get(email.id)
+            if result is None:
+                continue  # this email's LLM call failed; leave it unanalyzed
             is_low = (
                 result.confidence is not None
                 and result.confidence < LOW_CONFIDENCE_THRESHOLD
@@ -169,6 +193,13 @@ async def run_analysis(
         analyzed += 1
         if on_progress:
             on_progress(analyzed, total)
+
+    if failures:
+        # Surface AI failures (especially ai_only mode) instead of silently
+        # leaving mail unanalyzed. Successful results are already persisted.
+        raise RuntimeError(
+            f"{len(failures)}/{total} analyses failed; first: {failures[0]}"
+        )
 
     return analyzed, total, low_confidence
 
@@ -304,6 +335,11 @@ class AnalysisManager:
                 analyzed, total, low_confidence = await run_analysis(
                     db, account_id=account_id, limit=ANALYSIS_BATCH, on_progress=on_progress
                 )
+            # Fresh classifications change what the dashboard schedule shows;
+            # drop its cache so the next poll reflects the new results instead
+            # of serving the stale 60s-cached entry.
+            from app.services.schedule_analyzer import invalidate_cache
+            invalidate_cache()
             self._status[key] = {
                 "running": False,
                 "total": total,

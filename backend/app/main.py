@@ -44,19 +44,20 @@ _log = logging.getLogger(__name__)
 # (including Microsoft Graph OAuth accounts, which have no IMAP scope).
 BACKGROUND_SYNC_SECONDS = 60
 # How often to sweep for emails still waiting on AI analysis (new imports that
-# exceeded one batch, or mails left uncategorized by a category delete).
-ANALYSIS_SWEEP_SECONDS = 60
+# exceeded one batch, or mails left uncategorized by a category delete). Kept
+# short so fresh mail reaches the dashboard in seconds, not minutes.
+ANALYSIS_SWEEP_SECONDS = 15
 
 
 async def _analysis_sweep_loop() -> None:
     """Periodically find emails that need AI analysis and run it.
 
     ``run_analysis`` processes up to ANALYSIS_BATCH mails per run, so a large
-    import can leave a backlog; this loop keeps working the queue every minute
-    until it is empty. It also covers mails whose category was deleted (their
-    ``category`` is NULL, which the analysis query treats as pending).
+    import can leave a backlog; this loop keeps working the queue every few
+    seconds until it is empty. It also covers mails whose category was deleted
+    (their ``category`` is NULL, which the analysis query treats as pending).
     """
-    await asyncio.sleep(15)  # let startup settle
+    await asyncio.sleep(5)  # let startup settle
     while True:
         try:
             async with SessionLocal() as db:
@@ -77,7 +78,7 @@ async def _embedding_sweep_loop() -> None:
     ``embedding`` column is NULL; this loop keeps the backlog working in the
     background so the search UI can gradually gain semantic recall.
     """
-    await asyncio.sleep(20)  # let startup settle
+    await asyncio.sleep(5)  # let startup settle
     while True:
         try:
             from app.services.embedding_service import manager as emb_mgr

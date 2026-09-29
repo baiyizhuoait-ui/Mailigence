@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     # Deterministic fast-path (P2): unambiguous bulk mail / OTP / calendar
     # invites skip the LLM entirely (cost + stability). Set 0/false to disable.
     ai_skip_deterministic: bool = True
+    # How many emails are analyzed in parallel during a batch (each email =
+    # one LLM request). Cloud APIs scale nearly linearly; local Ollama/LM
+    # Studio queue requests internally, so a moderate value is safe there too.
+    ai_concurrency: int = 6
+    # Reuse a prior result for identical sender+subject instead of calling the
+    # LLM again (cost control). 0/false (default): AI mode always calls the AI.
+    ai_dedup_cache: bool = False
 
     # OAuth2 providers
     google_oauth_client_id: str = ""

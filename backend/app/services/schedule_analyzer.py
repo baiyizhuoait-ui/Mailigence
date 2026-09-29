@@ -6,7 +6,9 @@ asks the LLM to:
 2. Produce a priority queue — which emails to handle first and why.
 3. Generate a brief daily summary.
 
-Results are cached in-memory for 3 minutes to avoid excessive LLM calls.
+Results are cached in-memory for 1 minute (and invalidated whenever a batch
+of AI analysis finishes) to keep the dashboard responsive without hammering
+the LLM on every poll.
 
 When no AI key is configured, falls back to a rule-based heuristic that
 sorts by priority_score + action urgency.
@@ -30,7 +32,7 @@ _log = logging.getLogger(__name__)
 
 # Cache: (result, expires_at). Single-entry cache for the dashboard.
 _cache: dict[str, tuple[dict, float]] = {}
-_CACHE_TTL = 180  # 3 minutes
+_CACHE_TTL = 60  # 1 minute — analysis completion also invalidates it early
 
 
 def invalidate_cache() -> None:

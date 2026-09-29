@@ -90,7 +90,8 @@ async def dashboard_schedule(
     """AI-analyzed schedule & priority queue for pending emails.
 
     Auto-handles stale emails first (replied, read+FYI, no-action),
-    then returns the analysis. Cached for 3 minutes server-side.
+    then returns the analysis. Cached for 1 minute server-side and
+    invalidated as soon as a batch of AI analysis finishes.
     """
     result = await analyze_schedule(db, account_id)
     return {

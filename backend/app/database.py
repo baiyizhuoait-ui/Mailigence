@@ -197,7 +197,7 @@ async def init_db() -> None:
 # `label` is what the UI shows. Users may delete any of them later.
 _BUILTIN_CATEGORIES: list[tuple[str, str, str]] = [
     ("work", "工作", "#3b82f6"),
-    ("meeting", "会议", "#06b6d4"),
+    ("meeting", "日程计划", "#06b6d4"),
     ("finance", "财务账单", "#10b981"),
     ("notification", "系统通知", "#a855f7"),
     ("social", "社交", "#ec4899"),

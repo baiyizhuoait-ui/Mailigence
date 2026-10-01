@@ -81,7 +81,7 @@ const zh: Dict = {
   // Categories
   "cat.all": "全部分类",
   "cat.work": "工作",
-  "cat.meeting": "会议",
+  "cat.meeting": "日程计划",
   "cat.finance": "财务账单",
   "cat.system": "系统通知",
   "cat.social": "社交",
@@ -543,7 +543,7 @@ const en: Dict = {
   "sub.search": "Full-text search across all mailboxes.",
   "cat.all": "All categories",
   "cat.work": "Work",
-  "cat.meeting": "Meeting",
+  "cat.meeting": "Schedule plan",
   "cat.finance": "Finance",
   "cat.system": "System",
   "cat.social": "Social",

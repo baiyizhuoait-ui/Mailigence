@@ -79,18 +79,19 @@ CITED_MARKER = "---CITED_IDS---"
 # Cloud budget: 12 fragments × 600 chars keeps total prompt ≈3k tokens.
 RETRIEVAL_LIMIT = 12
 SNIPPET_MAX_CHARS = 600
-# Local 4k-window budget: fewer, shorter fragments + trimmed digest.
-LOCAL_RETRIEVAL_LIMIT = 6
-LOCAL_SNIPPET_MAX_CHARS = 300
-LOCAL_MAX_TOKENS = 1024
+# Local 8k-window budget (Ollama/LM Studio): ~10×420-char fragments ≈5.3k
+# prompt tokens + 2048 output leaves headroom under 8k.
+LOCAL_RETRIEVAL_LIMIT = 10
+LOCAL_SNIPPET_MAX_CHARS = 420
+LOCAL_MAX_TOKENS = 2048
 HISTORY_ROUNDS = 3
 # History budget: cap each turn and the total so long conversations can't
-# blow the context window (answers can be 500+ chars each; 3 unbounded
-# rounds already exceed a 4k local window together with fragments).
+# blow the context window (answers can be 500+ chars each). Local 8k windows
+# share the cloud caps now that fragments dominate the budget.
 HISTORY_TURN_MAX_CLOUD = 600
-HISTORY_TURN_MAX_LOCAL = 300
+HISTORY_TURN_MAX_LOCAL = 600
 HISTORY_TOTAL_MAX_CLOUD = 2200
-HISTORY_TOTAL_MAX_LOCAL = 1000
+HISTORY_TOTAL_MAX_LOCAL = 2200
 # Thinking models spend many tokens on reasoning before answering; give them
 # room plus time so the answer and the ---CITED_IDS--- trailer survive.
 MAX_TOKENS = 2048
@@ -98,7 +99,7 @@ TIMEOUT_SECONDS = 120
 PLANNER_TIMEOUT = 25
 # Important-mail digest lines (step-back context for broad questions).
 DIGEST_LIMIT = 12
-LOCAL_DIGEST_LIMIT = 8
+LOCAL_DIGEST_LIMIT = 12
 # Extra keyword queries the planner may contribute.
 MAX_EXPANSION_QUERIES = 3
 RRF_K = 60
@@ -133,7 +134,7 @@ class QueryPlan:
 
 
 def _is_local(cfg: AiConfig) -> bool:
-    """Local servers (Ollama/LM Studio/vLLM) → compact prompt budget."""
+    """Local servers (Ollama/LM Studio/vLLM) → compact 8k prompt budget."""
     return any(h in (cfg.base_url or "") for h in ("localhost", "127.0.0.1"))
 
 

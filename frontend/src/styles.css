@@ -261,6 +261,8 @@ button {
 .content {
   overflow-y: auto;
   padding: 34px 40px 48px;
+  display: flex;
+  flex-direction: column;
 }
 
 .topbar {
@@ -3231,14 +3233,72 @@ button {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  /* Fill the remaining viewport: the advisor/chat cards size in proportions,
+     never in fixed px, so window resizes keep the layout balanced. */
+  flex: 1;
+  min-height: 0;
 }
 
-/* Two-column bento layout: left = brief + schedule, right = stats + queue */
+/* Two-column layout: AI advisor (left) | AI chat (right), split by a
+   draggable divider whose position lives in --dash-left (persisted). */
 .dash-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: minmax(0, var(--dash-left, 62%)) 14px minmax(0, 1fr);
+  column-gap: 0;
   align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+
+.dash-grid > .dash-left {
+  margin-right: 5px;
+  min-height: 0;
+}
+
+.dash-grid > .dash-right {
+  margin-left: 5px;
+  min-height: 0;
+}
+
+/* Draggable column divider: wide transparent hit area, thin center bar. */
+.dash-splitter {
+  align-self: stretch;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+}
+
+.dash-splitter::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--border-soft);
+  transition: background 0.15s ease, width 0.15s ease;
+}
+
+.dash-splitter:hover::before,
+.dash-splitter:focus-visible::before,
+.dash-grid.dragging .dash-splitter::before {
+  width: 3px;
+  background: var(--accent);
+}
+
+.dash-splitter:focus-visible {
+  outline: none;
+}
+
+.dash-grid.dragging {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .dash-left {
@@ -3256,8 +3316,22 @@ button {
 }
 
 @media (max-width: 1100px) {
+  .dashboard-view {
+    flex: 0 0 auto; /* stacked cards scroll the page again */
+  }
   .dash-grid {
     grid-template-columns: 1fr;
+    gap: 20px;
+    flex: 0 0 auto;
+  }
+  .dash-grid > .dash-left {
+    margin-right: 0;
+  }
+  .dash-grid > .dash-right {
+    margin-left: 0;
+  }
+  .dash-splitter {
+    display: none;
   }
 }
 
@@ -3852,7 +3926,7 @@ button {
 .dash-right .chat-panel {
   flex: 1;
   margin-top: 0;
-  min-height: 420px;
+  min-height: 0;
 }
 
 .dash-right .chat-list {
@@ -3977,20 +4051,74 @@ mark {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 9px 32px 9px 14px;
+  border-radius: 10px;
+  padding: 9px 34px 9px 36px;
   font-size: 13.5px;
-  transition: border-color 0.16s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .search-bar .search-input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Magnifier glyph pinned inside the input's left edge */
+.search-glyph {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 15px;
+  color: var(--text-faint);
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* Clear (×) button on the right edge */
+.search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.search-clear:hover {
+  background: var(--hover, rgba(0, 0, 0, 0.06));
+  color: var(--text);
+}
+
+/* "/" shortcut hint chip shown while the box is empty */
+.search-kbd-hint {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  background: var(--panel-3);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 2px 7px;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .search-spinner {
   position: absolute;
-  right: 12px;
+  right: 32px; /* clear the × button on the right edge */
   top: 50%;
   width: 12px;
   height: 12px;
@@ -4049,14 +4177,36 @@ mark {
   cursor: pointer;
 }
 
-.search-preview:hover {
+.search-preview:hover,
+.search-preview.active {
   background: var(--hover, rgba(0, 0, 0, 0.04));
+}
+
+.search-preview.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.search-preview-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.search-preview-date {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .search-preview-subject {
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .search-preview-meta {
@@ -4082,7 +4232,20 @@ mark {
   font-size: 12.5px;
   font-weight: 500;
   padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   cursor: pointer;
+}
+
+.search-dropdown-enter {
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  padding: 1px 6px;
+  background: var(--panel-2);
 }
 
 .search-dropdown-all:hover {

@@ -23,6 +23,10 @@ const TYPE_ICONS: Record<string, string> = {
   reminder: "🔔",
 };
 
+// Column splitter: left/right width ratio (30–75%) persisted per browser.
+const SPLIT_KEY = "mailigence.dash.split";
+const clampSplit = (pct: number) => Math.min(75, Math.max(30, pct));
+
 export function DashboardView() {
   const { t, lang } = useI18n();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -40,6 +44,48 @@ export function DashboardView() {
   // Fingerprint of the advisor data we last rendered. Sent back on every
   // fetch so the server can skip the LLM entirely when nothing changed.
   const scheduleFp = useRef<string | null>(null);
+
+  // Draggable divider state between the advisor and chat columns.
+  const [splitPct, setSplitPct] = useState<number>(() => {
+    const stored = Number(localStorage.getItem(SPLIT_KEY));
+    return Number.isFinite(stored) && stored > 0 ? clampSplit(stored) : 62;
+  });
+  const [dragging, setDragging] = useState(false);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  const onSplitPointerDown = useCallback((e: React.PointerEvent) => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    e.preventDefault();
+    setDragging(true);
+    const onMove = (ev: PointerEvent) => {
+      const rect = grid.getBoundingClientRect();
+      if (rect.width < 50) return;
+      setSplitPct(clampSplit(((ev.clientX - rect.left) / rect.width) * 100));
+    };
+    const onUp = () => {
+      setDragging(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setSplitPct((p) => {
+        localStorage.setItem(SPLIT_KEY, p.toFixed(1));
+        return p;
+      });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
+
+  const onSplitKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 5 : 2;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setSplitPct((p) => clampSplit(p - step));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setSplitPct((p) => clampSplit(p + step));
+    }
+  }, []);
 
   // Fetch the AI advisor board (brief + schedule merged).
   const fetchSchedule = useCallback(async () => {
@@ -206,8 +252,12 @@ export function DashboardView() {
         </button>
       </div>
 
-      {/* Two-column layout: AI advisor (left) | AI chat (right) */}
-      <div className="dash-grid">
+      {/* Two-column layout: AI advisor (left) | splitter | AI chat (right) */}
+      <div
+        className={`dash-grid ${dragging ? "dragging" : ""}`}
+        ref={gridRef}
+        style={{ "--dash-left": `${splitPct}%` } as React.CSSProperties}
+      >
         {/* Left column: merged AI advisor (brief + actions + schedule) */}
         <div className="dash-left">
           {schedule && (
@@ -334,6 +384,18 @@ export function DashboardView() {
             </div>
           )}
         </div>
+
+        {/* Draggable divider between the two columns */}
+        <button
+          type="button"
+          className="dash-splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("dash.resize")}
+          title={t("dash.resize")}
+          onPointerDown={onSplitPointerDown}
+          onKeyDown={onSplitKeyDown}
+        />
 
         {/* Right column: AI cross-mailbox chat (when AI is configured) */}
         <div className="dash-right">

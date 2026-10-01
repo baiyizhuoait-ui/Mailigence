@@ -113,6 +113,7 @@ _SCHEDULE_PROMPT = """你是一位高效的首席执行助理（Chief of Staff�
 - priority_queue 按建议的处理顺序排列，最多8条：今天到期的 > 明天到期的 > 本周的 > 无明确期限的；需要回复的高于仅需查看的
 - action 必须具体可执行：动词开头、包含关键对象/时间（如"回复确认周三15:00面试"），禁止写"处理邮件"这类空话
 - 广告、营销、纯通知类邮件不要进入 priority_queue
+- type=meeting 仅用于真实的会议邀请或日历会议；账单日、行程提醒、物流通知等一般性时间提醒用 reminder，明确截止期限用 deadline，预约确认用 appointment
 - 从正文和主题中识别会议邀请、日历通知、截止提醒、预约等时间敏感事项，提取"明天下午3点"、"1月15日截止"、"周五 15:00"等表达并换算成真实日期
 - 根据 {today} 计算实际日期，将 schedule_items 的 group 设为 today/tomorrow/this_week/upcoming
 - 邮件内容没有明确时间信息时不要臆造日期，也不要放入 schedule_items"""

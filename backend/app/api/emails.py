@@ -25,6 +25,7 @@ from app.schemas.email import (
 from app.services.ai_config import load_ai_config
 from app.services.memories import get_memory_texts
 from app.services import reply_draft_service
+from app.services.mail_sync import _extra_folders_for
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
@@ -163,12 +164,28 @@ async def _fetch_full_body(db: AsyncSession, email: UnifiedEmail) -> dict:
         client = await open_connection(account, credential)
         try:
             body = await asyncio.to_thread(
-                client.fetch_full_body, email.message_id, sent=sent
+                client.fetch_full_body,
+                email.message_id,
+                sent=sent,
+                # Auto-sorted/archived mail (netease 广告邮件, Gmail All Mail)
+                # only lives in those folders — INBOX SEARCH alone misses it.
+                extra_folders=[] if sent else _extra_folders_for(account.platform),
+                # Some servers (QQ) silently fail HEADER searches — these
+                # enable the date-window + local header-match fallback.
+                from_addr=email.sender_email or "",
+                received_at=email.received_at,
+                subject=email.subject or "",
             )
         finally:
             await asyncio.to_thread(client.logout)
 
     if not body.get("html") and not body.get("text"):
+        # Message no longer on the server (auto-cleaned junk, user deletion…)
+        # — degrade to the stored snippet instead of an error so the detail
+        # view still shows readable content.
+        snippet = (email.body_snippet or "").strip()
+        if snippet:
+            return {"html": "", "text": snippet}
         raise RuntimeError("Message body was not found on the server")
     return {"html": body.get("html", ""), "text": body.get("text", "")}
 

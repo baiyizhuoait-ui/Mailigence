@@ -154,6 +154,22 @@ def _extract_emails(value: str | None) -> list[str]:
     return [addr.lower() for _, addr in email.utils.getaddresses([value]) if addr]
 
 
+def _norm_subject(value: str | None) -> str:
+    """Normalise a subject for comparison: decode RFC2047, fold whitespace.
+
+    ``Re:``/``Fwd:`` prefixes are stripped so a reply's subject still matches
+    the original stored subject when locating a message on the server.
+    """
+    if not value:
+        return ""
+    try:
+        value = str(make_header(decode_header(value)))
+    except Exception:  # noqa: BLE001 — malformed header, keep raw
+        pass
+    value = re.sub(r"\s+", " ", value).strip().lower()
+    return re.sub(r"^(?:(?:re|fwd?|fw|回复|转发|答复)\s*[:：]\s*)+", "", value)
+
+
 def _html_to_text(html_str: str) -> str:
     """Convert HTML to clean plain text.
 
@@ -520,15 +536,36 @@ class ImapClient:
             results.extend(self._parse_fetch_response(data, direction))
         return results
 
-    def fetch_full_body(self, message_id: str, *, sent: bool = False) -> dict[str, str]:
+    def fetch_full_body(
+        self,
+        message_id: str,
+        *,
+        sent: bool = False,
+        extra_folders: Iterable[str] | None = None,
+        from_addr: str = "",
+        received_at: datetime | None = None,
+        subject: str = "",
+    ) -> dict[str, str]:
         """Fetch the full body of a single message by Message-ID.
 
         Returns ``{"html": ..., "text": ...}`` (either may be empty). Uses
         ``BODY.PEEK[]`` so the fetch never marks the message as read. When
         ``sent`` is true the Sent folder is tried first, falling back to
         INBOX.
+
+        Lookup strategy per folder (INBOX first, then ``extra_folders`` —
+        decoded names like ``["广告邮件"]`` for NetEase or ``["All Mail"]``
+        for Gmail, where auto-sorted/archived mail lives):
+
+        1. ``SEARCH HEADER MESSAGE-ID`` — works on Gmail/NetEase, but some
+           servers (QQ) silently match nothing, so on an empty result:
+        2. ``SEARCH SINCE/BEFORE`` around ``received_at`` (date keys are the
+           only keys QQ honours reliably), then match candidate UIDs
+           locally by Message-ID header, or by From + Subject for mails
+           that have no Message-ID header at all (synthetic ids).
         """
         assert self._conn is not None
+        mid = message_id.strip().strip("<>")
         if sent:
             try:
                 self.select_sent_folder()
@@ -537,28 +574,156 @@ class ImapClient:
         else:
             self.select_folder("INBOX")
 
-        # UID SEARCH HEADER MESSAGE-ID "<id>". The <...> form matches the
-        # RFC822 Message-ID header exactly; < > are not IMAP atom-special
-        # chars so this is a legal unquoted search string on all servers.
-        mid = message_id.strip().strip("<>")
-        typ, data = self._conn.uid("SEARCH", "HEADER", "MESSAGE-ID", f"<{mid}>")
-        if typ != "OK":
-            raise RuntimeError(f"SEARCH failed: {data!r}")
-        uids = data[0].split() if data and data[0] else []
-        if not uids:
-            return {"html": "", "text": ""}
+        body = self._find_and_fetch(mid, from_addr, received_at, subject)
+        if body.get("html") or body.get("text"):
+            return body
 
-        typ, data = self._conn.uid("FETCH", uids[-1].decode(), "(BODY.PEEK[])")
-        if typ != "OK":
-            raise RuntimeError(f"FETCH failed: {data!r}")
-        for item in data:
-            if not isinstance(item, tuple) or len(item) != 2:
+        for name in extra_folders or []:
+            raw = self.find_folder_raw(name)
+            if not raw:
                 continue
-            raw = item[1]
-            if not isinstance(raw, (bytes, bytearray)):
+            try:
+                self.select_folder(raw)
+                body = self._find_and_fetch(mid, from_addr, received_at, subject)
+            except Exception as exc:  # noqa: BLE001 — folder may be flaky
+                _log.warning("full-body fallback folder %r failed: %s", name, exc)
                 continue
-            msg = email.message_from_bytes(bytes(raw), policy=email_policy.compat32)
-            return _extract_full_body(msg)
+            if body.get("html") or body.get("text"):
+                return body
+        return {"html": "", "text": ""}
+
+    def _find_and_fetch(
+        self,
+        mid: str,
+        from_addr: str = "",
+        received_at: datetime | None = None,
+        subject: str = "",
+    ) -> dict[str, str]:
+        """Locate a message in the *currently selected* folder and fetch it."""
+        uids = self._search_message_id(mid)
+        if uids:
+            body = self._fetch_full_by_uids(uids)
+            if body.get("html") or body.get("text"):
+                return body
+        if received_at:
+            window = self._search_date_window(received_at)
+            uid = self._match_uid_by_header(window, mid, from_addr, subject)
+            if uid:
+                return self._fetch_full_by_uids([uid])
+        return {"html": "", "text": ""}
+
+    def _search_message_id(self, mid: str) -> list[str]:
+        """UID SEARCH HEADER MESSAGE-ID; empty list when unsupported/missing.
+
+        Some servers (QQ) answer ``OK`` with zero matches for HEADER keys —
+        callers must fall back to the date-window strategy.
+        """
+        assert self._conn is not None
+        try:
+            typ, data = self._conn.uid(
+                "SEARCH", "HEADER", "MESSAGE-ID", f"<{mid}>"
+            )
+        except Exception as exc:  # noqa: BLE001 — server may reject the key
+            _log.warning("HEADER MESSAGE-ID search rejected: %s", exc)
+            return []
+        if typ != "OK" or not data or not data[0]:
+            return []
+        return [u.decode() for u in data[0].split()]
+
+    def _search_date_window(self, received_at: datetime, *, days: int = 2) -> list[str]:
+        """UID SEARCH over a ``received_at ± days`` window using SINCE/BEFORE."""
+        assert self._conn is not None
+        day = received_at.date() if isinstance(received_at, datetime) else received_at
+        since = day - timedelta(days=1)
+        before = day + timedelta(days=days)
+        try:
+            typ, data = self._conn.uid(
+                "SEARCH",
+                "SINCE",
+                _format_imap_date(since),
+                "BEFORE",
+                _format_imap_date(before),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("SINCE/BEFORE window search failed: %s", exc)
+            return []
+        if typ != "OK" or not data or not data[0]:
+            return []
+        return [u.decode() for u in data[0].split()]
+
+    def _match_uid_by_header(
+        self,
+        uids: list[str],
+        mid: str,
+        from_addr: str = "",
+        subject: str = "",
+    ) -> str | None:
+        """Find the candidate UID whose headers match ``mid`` (or From+Subject).
+
+        ``Message-ID`` headers are fetched in cheap batches and matched
+        locally — sidesteps servers whose SEARCH HEADER is broken. Mails with
+        no Message-ID header at all (synthetic ids in the DB) are matched by
+        From address + decoded subject.
+        """
+        assert self._conn is not None
+        want_from = (from_addr or "").strip().lower()
+        want_subject = _norm_subject(subject)
+        secondary: str | None = None
+        for i in range(0, len(uids), FETCH_BATCH):
+            batch = uids[i : i + FETCH_BATCH]
+            typ, data = self._conn.uid(
+                "FETCH",
+                ",".join(batch),
+                "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT)])",
+            )
+            if typ != "OK":
+                continue
+            for item in data:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    continue
+                meta, hdr = item
+                if not isinstance(hdr, (bytes, bytearray)):
+                    continue
+                uid_match = re.search(rb"UID\s+(\d+)", bytes(meta))
+                if not uid_match:
+                    continue
+                uid = uid_match.group(1).decode()
+                header_msg = email.message_from_bytes(
+                    bytes(hdr), policy=email_policy.compat32
+                )
+                msg_mid = (header_msg.get("Message-ID") or "").strip().strip("<>")
+                if msg_mid:
+                    if msg_mid == mid:
+                        return uid
+                    continue
+                # No Message-ID header — synthetic id; match From + Subject.
+                sender = _extract_emails(header_msg.get("From") or "")
+                from_ok = bool(want_from) and bool(sender) and sender[0].lower() == want_from
+                subj_ok = (
+                    bool(want_subject)
+                    and _norm_subject(header_msg.get("Subject") or "") == want_subject
+                )
+                if from_ok and (subj_ok or not want_subject):
+                    secondary = secondary or uid
+        return secondary
+
+    def _fetch_full_by_uids(self, uids: list[str]) -> dict[str, str]:
+        """Fetch ``BODY.PEEK[]`` for the given UIDs and extract html/text."""
+        assert self._conn is not None
+        for uid in uids:
+            typ, data = self._conn.uid("FETCH", uid, "(BODY.PEEK[])")
+            if typ != "OK":
+                continue
+            for item in data:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    continue
+                raw = item[1]
+                if not isinstance(raw, (bytes, bytearray)):
+                    continue
+                msg = email.message_from_bytes(
+                    bytes(raw), policy=email_policy.compat32
+                )
+                return _extract_full_body(msg)
         return {"html": "", "text": ""}
 
     def fetch_flags(self, uids: Iterable[str]) -> dict[str, bool]:

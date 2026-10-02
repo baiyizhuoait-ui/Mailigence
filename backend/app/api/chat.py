@@ -41,6 +41,9 @@ class CitedEmail(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     cited_emails: list[CitedEmail]
+    # Provenance flag surfaced in the UI: "ai" = LLM answer. Reserved for a
+    # future degraded path so the user always knows who produced an answer.
+    source: str = "ai"
 
 
 @router.post("", response_model=ChatResponse)
@@ -96,4 +99,6 @@ async def chat(
                 )
             )
 
-    return ChatResponse(answer=result.answer, cited_emails=cited_emails)
+    return ChatResponse(
+        answer=result.answer, cited_emails=cited_emails, source=result.source
+    )

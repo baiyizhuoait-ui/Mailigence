@@ -518,6 +518,7 @@ const zh: Dict = {
   "chat.send": "发送",
   "chat.loading": "正在检索邮件并生成回答…",
   "chat.failed": "生成回答失败：",
+  "chat.source.fallback": "规则生成（AI 暂不可用）",
   "chat.retry": "重试",
   "chat.cited": "引用邮件",
 };
@@ -969,6 +970,7 @@ const en: Dict = {
   "chat.send": "Send",
   "chat.loading": "Searching emails and generating answer…",
   "chat.failed": "Failed to answer: ",
+  "chat.source.fallback": "Rule-based (AI unavailable)",
   "chat.retry": "Retry",
   "chat.cited": "Cited emails",
 };

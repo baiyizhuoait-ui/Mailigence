@@ -374,4 +374,6 @@ export interface CitedEmail {
 export interface ChatResponse {
   answer: string;
   cited_emails: CitedEmail[];
+  /** Provenance: "ai" = LLM answer; reserved for future degraded paths. */
+  source: string;
 }

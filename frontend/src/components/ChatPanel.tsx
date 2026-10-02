@@ -7,6 +7,7 @@ interface ChatEntry {
   role: "user" | "assistant";
   content: string;
   cited: CitedEmail[];
+  source?: string;
 }
 
 interface ChatPanelProps {
@@ -34,7 +35,12 @@ export function ChatPanel({ onOpenEmail }: ChatPanelProps) {
       const res = await api.chat({ message, history });
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: res.answer, cited: res.cited_emails },
+        {
+          role: "assistant",
+          content: res.answer,
+          cited: res.cited_emails,
+          source: res.source,
+        },
       ]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -80,6 +86,11 @@ export function ChatPanel({ onOpenEmail }: ChatPanelProps) {
         {messages.map((m, i) => (
           <div key={i} className={`chat-msg ${m.role}`}>
             <div>{m.content}</div>
+            {m.role === "assistant" && m.source && m.source !== "ai" && (
+              <span className="chat-source-badge">
+                {t(`chat.source.${m.source}`)}
+              </span>
+            )}
             {m.role === "assistant" && m.cited.length > 0 && (
               <div className="chat-cited">
                 <span className="chat-cited-label">{t("chat.cited")}</span>

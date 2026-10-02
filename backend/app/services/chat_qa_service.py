@@ -1,6 +1,6 @@
 """AI-powered cross-mailbox chat QA.
 
-Given a natural-language question, builds an answer from three layered
+Given a natural-language question, builds an answer from four layered
 context sources (each strictly grounded, nothing invented):
 
 1. **Step-back digest** — mailbox statistics + a one-line list of the most
@@ -11,8 +11,17 @@ context sources (each strictly grounded, nothing invented):
    keywords are each run through the three-way recall (keyword/semantic)
    and fused with RRF, so vague questions autonomously surface likely
    relevant mail ("query expansion", see arXiv:2305.14283 and multi-query
-   retrieval patterns).
-3. **Conversation history** — last few turns for follow-up questions.
+   retrieval patterns). Structured filters parsed by pure rules
+   (``query_filters.parse_structured_filters`` — "今天", "垃圾邮件",
+   "上个月") narrow every retrieval call.
+3. **Category-aggregate bypass** — when the question names a category AND
+   asks to enumerate ("今天有什么垃圾邮件，都是谁发的"), retrieval ranking
+   is skipped entirely in favour of a direct SQL GROUP BY over
+   ``unified_emails``. Ads never reach the important-mail digest, so this is
+   the only path that can answer "listing" questions about them; the model
+   just reads the pre-computed table, which even small local models do
+   reliably.
+4. **Conversation history** — last few turns for follow-up questions.
 
 A tiny planner call first classifies the question (broad vs specific) and
 extracts search keywords. Local servers (Ollama / LM Studio, detected by a
@@ -28,22 +37,24 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select, Date
 
 from app.models.email import MailDirection, UnifiedEmail
 from app.models.email_account import EmailAccount
 from app.services.ai_analyzer import _anthropic_chat, _openai_chat
 from app.services.ai_config import AiConfig
 from app.services.email_search import search_emails
+from app.services.query_filters import has_enumeration_intent, parse_structured_filters
 
 _log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """你是用户的邮件助理。你只能根据下面提供的材料回答问题：邮箱概况、重要邮件列表、相关邮件片段，严禁编造材料之外的信息。
+SYSTEM_PROMPT = """你是用户的邮件助理。你只能根据下面提供的材料回答问题：邮箱概况、重要邮件列表、分类统计结果、相关邮件片段，严禁编造材料之外的信息。
 
 回答策略：
 - 概况/总结/泛泛类问题（如"最近有什么重要的事"）：先用邮箱概况给一句总览，再按"需要行动 / 时间敏感 / 其余值得注意"分组列点；每个要点后标注来源邮件 [ID:xx]
+- 分类统计/枚举类问题（如"垃圾邮件都是谁发的"）：直接按（四）分类统计结果如实转述，不要凭片段猜测；统计结果为空时如实说明该范围内没有邮件
 - 具体问题：直接给结论，再补充细节，引用的邮件标注 [ID:xx]
 - 材料确实完全无法回答时才说明不足，并建议用户如何缩小问题范围；不要轻易放弃——先利用概况和重要邮件列表作答
 - 回答简洁直接，不要复述材料原文
@@ -62,6 +73,9 @@ USER_PROMPT_TEMPLATE = """用户问题：{query}
 
 （三）相关邮件片段：
 {fragments}
+
+（四）分类统计结果（按分类+时间直接对全部邮件 SQL 聚合，仅当问题点名某类邮件时提供）：
+{category_stats}
 
 对话历史（如有，最近3轮）：
 {history}
@@ -287,6 +301,70 @@ async def _digest_important_emails(db, limit: int) -> str:
     return "\n".join(lines)
 
 
+async def _category_stats_material(
+    db,
+    category: str,
+    date_from: str | None,
+    date_to: str | None,
+    max_groups: int = 15,
+) -> str:
+    """Direct SQL aggregate for enumerative category questions.
+
+    ``SELECT sender, COUNT(*), MIN(subject) ... WHERE category=... GROUP BY
+    sender ORDER BY COUNT(*) DESC`` — computed over *all* matching rows, not
+    retrieval-ranked fragments, so the model can simply read the table aloud.
+    This covers ad/marketing mail, which the important-mail digest
+    deliberately excludes.
+    """
+    conditions = [UnifiedEmail.category == category]
+    if date_from:
+        # Same semantics as email_search._filter_clause: (:date)::date casts.
+        conditions.append(UnifiedEmail.received_at >= cast(date_from, Date))
+    if date_to:
+        conditions.append(
+            UnifiedEmail.received_at
+            < cast((date.fromisoformat(date_to) + timedelta(days=1)).isoformat(), Date)
+        )
+
+    total = await db.scalar(
+        select(func.count()).select_from(UnifiedEmail).where(*conditions)
+    )
+    if not total:
+        return "（该分类在指定时间范围内没有邮件——请如实告知用户）"
+
+    groups = (
+        await db.execute(
+            select(
+                UnifiedEmail.sender,
+                UnifiedEmail.sender_email,
+                func.count().label("cnt"),
+                func.min(UnifiedEmail.subject).label("sample_subject"),
+            )
+            .where(*conditions)
+            .group_by(UnifiedEmail.sender, UnifiedEmail.sender_email)
+            .order_by(func.count().desc())
+            .limit(max_groups)
+        )
+    ).all()
+
+    window = f"{date_from or '最早'} ~ {date_to or '今天'}"
+    lines = [
+        f'分类"{category}" · 时间范围 {window}：共 {total} 封，'
+        f"{len(groups)} 个发件人（按邮件数降序）："
+    ]
+    for sender, sender_email, cnt, sample in groups:
+        name = sender or sender_email or "（未知发件人）"
+        subject = (sample or "（无主题）")[:40]
+        lines.append(f"- {name} <{sender_email or '—'}>：{cnt} 封，示例主题「{subject}」")
+    if total and len(groups) == max_groups:
+        more = await db.scalar(
+            select(func.count(func.distinct(UnifiedEmail.sender_email))).where(*conditions)
+        )
+        if more and more > max_groups:
+            lines.append(f"（另有约 {more - max_groups} 个发件人未列出）")
+    return "\n".join(lines)
+
+
 def _rrf_merge(result_lists: list[list[dict]], limit: int) -> list[dict]:
     """Fuse multiple retrieval result lists with Reciprocal Rank Fusion."""
     fused: dict[int, tuple[float, dict]] = {}
@@ -389,7 +467,24 @@ async def chat_qa(
     limit = limit or (LOCAL_RETRIEVAL_LIMIT if local else RETRIEVAL_LIMIT)
     snippet_max = LOCAL_SNIPPET_MAX_CHARS if local else SNIPPET_MAX_CHARS
 
-    plan = await _plan_query(cfg, query, history)
+    # Pure-rule structured filters ("今天", "垃圾邮件", "上个月" ...) — parsed
+    # without any LLM, so they work identically for local and cloud models.
+    filters = parse_structured_filters(query)
+    category_stats = "（无）"
+    bypass = bool(filters["category"]) and has_enumeration_intent(query)
+    if bypass:
+        # Enumerative category question ("垃圾邮件都是谁发的") → answer from a
+        # direct SQL aggregate instead of retrieval ranking. Ads never reach
+        # the important-mail digest and rank poorly under fuzzy retrieval, so
+        # this is the only reliable path for "list X mails" questions.
+        category_stats = await _category_stats_material(
+            db, filters["category"], filters["date_from"], filters["date_to"]
+        )
+        # Include the stats/digest context, but skip the LLM planner call —
+        # keyword expansion is pointless when we bypass retrieval entirely.
+        plan = QueryPlan(broad=True)
+    else:
+        plan = await _plan_query(cfg, query, history)
 
     stats_needed = _detect_stats_query(query) or plan.broad
     stats_context = (await _compute_stats(db)) if stats_needed else "（无）"
@@ -402,18 +497,28 @@ async def chat_qa(
 
     # Multi-query retrieval: original query first (the anchor), then the
     # planner's expansion keywords. RRF merges so items multiple queries
-    # agree on rise to the top.
+    # agree on rise to the top. Structured filters (category/date window)
+    # narrow every call so "今天有什么垃圾邮件" can't drift across the DB.
     result_lists: list[list[dict]] = []
     seen_ids: set[int] = set()
-    for q in [query, *plan.keywords]:
-        if not q:
-            continue
-        results, _total = await search_emails(db, q, limit=10, cfg=cfg)
-        if results:
-            result_lists.append(results)
-            seen_ids.update(r["id"] for r in results)
-        if len(seen_ids) >= limit:
-            break
+    if not bypass:
+        for q in [query, *plan.keywords]:
+            if not q:
+                continue
+            results, _total = await search_emails(
+                db,
+                q,
+                limit=10,
+                cfg=cfg,
+                category=filters["category"],
+                date_from=filters["date_from"],
+                date_to=filters["date_to"],
+            )
+            if results:
+                result_lists.append(results)
+                seen_ids.update(r["id"] for r in results)
+            if len(seen_ids) >= limit:
+                break
     results = _rrf_merge(result_lists, limit) if result_lists else []
 
     if results:
@@ -428,6 +533,8 @@ async def chat_qa(
                 f"    摘要:{snippet}"
             )
         fragments = "\n".join(parts)
+    elif bypass:
+        fragments = "（未使用检索——本问题已由（四）分类统计结果覆盖）"
     else:
         fragments = "（无命中——请优先依据概况和重要邮件列表回答）"
 
@@ -456,6 +563,7 @@ async def chat_qa(
         stats_context=stats_context,
         important_list=important_list,
         fragments=fragments,
+        category_stats=category_stats,
         history=history_text,
     )
 
@@ -468,25 +576,30 @@ async def chat_qa(
     if not embedding_effective:
         system_prompt += _NO_EMBEDDING_NOTE
 
+    raw = await _call_llm(cfg, system_prompt, user_content, local)
+    answer, cited_ids = _split_cited_ids(raw)
+    return ChatResult(answer=answer, cited_ids=cited_ids)
+
+
+async def _call_llm(
+    cfg: AiConfig, system_prompt: str, user_content: str, local: bool
+) -> str:
+    """Dispatch one answer-generating chat call to the configured provider."""
     if cfg.provider == "anthropic":
-        raw = await asyncio.wait_for(
+        return await asyncio.wait_for(
             _anthropic_chat(
                 cfg, user_content, system_prompt, max_tokens=MAX_TOKENS, timeout=TIMEOUT_SECONDS
             ),
             timeout=TIMEOUT_SECONDS,
         )
-    else:
-        raw = await asyncio.wait_for(
-            _openai_chat(
-                cfg,
-                user_content,
-                system_prompt,
-                max_tokens=LOCAL_MAX_TOKENS if local else MAX_TOKENS,
-                json_mode=False,
-                timeout=TIMEOUT_SECONDS,
-            ),
+    return await asyncio.wait_for(
+        _openai_chat(
+            cfg,
+            user_content,
+            system_prompt,
+            max_tokens=LOCAL_MAX_TOKENS if local else MAX_TOKENS,
+            json_mode=False,
             timeout=TIMEOUT_SECONDS,
-        )
-
-    answer, cited_ids = _split_cited_ids(raw)
-    return ChatResult(answer=answer, cited_ids=cited_ids)
+        ),
+        timeout=TIMEOUT_SECONDS,
+    )

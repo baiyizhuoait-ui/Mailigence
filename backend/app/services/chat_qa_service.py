@@ -94,19 +94,34 @@ def _now_context() -> str:
 
     LLMs have no clock — without this, "前天/昨天" questions make even a
     correct retrieval window useless because the model can't map the
-    relative day onto the UTC dates shown in the materials. Dates here
-    follow the project-wide UTC convention (query_filters._utc_today,
-    _compute_stats) so the model's conversion aligns with the SQL window.
+    relative day onto the UTC dates shown in the materials. Small models
+    mis-align compressed arithmetic hints ("往前推 1 天是 X，2 天是 Y" got
+    read as 昨天=X), so spell out EVERY relative day as an explicit
+    lookup table — the model must never do date arithmetic itself.
+    Dates follow the project-wide UTC convention (query_filters._utc_today,
+    _compute_stats) so the table aligns with the SQL windows.
     """
     now_utc = datetime.now(timezone.utc)
     now_cst = now_utc.astimezone(_CST)
+    day = now_utc.date()
+
+    def d(offset: int) -> str:
+        return (day + timedelta(days=offset)).isoformat()
+
+    monday = day - timedelta(days=day.weekday())
+    sunday = monday + timedelta(days=6)
     return (
-        f"UTC 今天是 {now_utc:%Y-%m-%d}（{_WEEKDAYS_CN[now_utc.weekday()]}），"
-        f"UTC 今天往前推 1 天是 {(now_utc - timedelta(days=1)):%Y-%m-%d}，"
-        f"2 天是 {(now_utc - timedelta(days=2)):%Y-%m-%d}；"
-        f"北京时间 {now_cst:%Y-%m-%d %H:%M}。"
+        f"UTC 今天是 {day.isoformat()}（{_WEEKDAYS_CN[now_utc.weekday()]}），"
+        f"北京时间 {now_cst:%Y-%m-%d %H:%M}。\n"
+        "相对日期对照表（均为 UTC 日期，回答时直接查表，不要自己计算）：\n"
+        f"- 明天 = {d(+1)}\n"
+        f"- 今天 = {d(0)}\n"
+        f"- 昨天 = {d(-1)}\n"
+        f"- 前天 = {d(-2)}\n"
+        f"- 大前天 = {d(-3)}\n"
+        f"- 本周（周一起）= {monday.isoformat()} 至 {sunday.isoformat()}\n"
         "材料中的邮件日期均为 UTC 日期；用户提到“今天/昨天/前天/本周”等相对时间时，"
-        "先按上面的日期换算成具体日期，再对照材料回答，不要回答说材料中没有日期。"
+        "先查上表换成具体日期，再对照材料回答，不要回答说材料中没有日期。"
     )
 
 # Tiny pre-retrieval planner: classify + extract search keywords.

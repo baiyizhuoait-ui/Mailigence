@@ -207,8 +207,10 @@ def test_filtered_retrieval_passes_filters(monkeypatch):
 
 
 def test_prompt_injects_current_time(monkeypatch):
-    """The QA prompt must carry today's UTC date so relative days (前天) map
-    onto the UTC dates shown in materials — local and cloud models alike."""
+    """The QA prompt must carry an explicit relative-date lookup table so
+    relative days (昨天/前天) map onto the UTC dates shown in materials —
+    the model must never do date arithmetic itself (qwen3.5:9b mis-aligned
+    compressed arithmetic hints and answered 昨天=today-2)."""
     captured: dict = {}
 
     async def _fake_search(db, q, limit=15, offset=0, **kwargs):
@@ -231,6 +233,8 @@ def test_prompt_injects_current_time(monkeypatch):
     prompt = captured["user_content"]
     assert "（〇）当前时间" in prompt
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    assert today in prompt
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-    assert yesterday in prompt
+    d1 = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    d2 = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    assert f"- 今天 = {today}" in prompt
+    assert f"- 昨天 = {d1}" in prompt
+    assert f"- 前天 = {d2}" in prompt

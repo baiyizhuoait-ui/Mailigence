@@ -44,6 +44,9 @@ class AiConfig:
     api_key_from_db: bool = False  # whether the key came from a profile (DB) or env
     embedding_model: str = ""      # semantic-search model; empty -> auto/off
     profile_id: int | None = None  # active profile driving this config (None=env)
+    # Resolved Ollama context window for this config: profile manual value or
+    # probe cache. None → caller falls back to env AI_NUM_CTX / server default.
+    resolved_num_ctx: int | None = None
 
     @property
     def use_ai(self) -> bool:
@@ -139,6 +142,7 @@ async def create_profile(
     base_url: str,
     api_key: str,
     model: str,
+    num_ctx: int = 0,
 ) -> AIProviderProfile:
     """Create a profile; the first one (or when none is active) auto-activates."""
     existing = await list_profiles(db)
@@ -147,6 +151,7 @@ async def create_profile(
         provider_type=provider_type,
         base_url=(base_url or "").strip().rstrip("/"),
         model=(model or "").strip(),
+        num_ctx=max(int(num_ctx or 0), 0),
         api_key_encrypted=crypto.encrypt(api_key.strip()) if api_key.strip() else "",
         is_active=not any(p.is_active for p in existing),
     )
@@ -165,6 +170,7 @@ async def update_profile(
     base_url: str | None = None,
     model: str | None = None,
     api_key: str | None = None,
+    num_ctx: int | None = None,
 ) -> AIProviderProfile:
     """Edit a profile. Empty ``api_key`` keeps the stored key."""
     if label is not None:
@@ -175,6 +181,8 @@ async def update_profile(
         profile.base_url = (base_url or "").strip().rstrip("/")
     if model is not None:
         profile.model = (model or "").strip()
+    if num_ctx is not None:
+        profile.num_ctx = max(int(num_ctx), 0)
     if api_key is not None and api_key.strip():
         profile.api_key_encrypted = crypto.encrypt(api_key.strip())
     profile.updated_at = datetime.now(timezone.utc)
@@ -215,6 +223,10 @@ async def load_ai_config(db: AsyncSession) -> AiConfig:
     Global analysis mode / embedding model come from ``app_settings`` (falling
     back to .env). Provider connection fields come from the active profile
     (falling back to .env when no profile is saved).
+
+    num_ctx resolution: profile manual value (>0) > probe cache > None. None
+    means "send no num_ctx" — the server default applies (a Modelfile with
+    num_ctx 16384 keeps working; we never force a small window at runtime).
     """
     row = await db.get(AppSetting, 1)
     mode = (row.ai_analysis_mode or "") if row else ""
@@ -251,6 +263,19 @@ async def load_ai_config(db: AsyncSession) -> AiConfig:
             settings.anthropic_api_key if provider == "anthropic" else settings.ai_api_key
         )
 
+    # Context window: manual profile value wins, then the probe cache. When
+    # neither applies we leave None — the Ollama request omits num_ctx and the
+    # server default (e.g. the Modelfile's) takes effect.
+    resolved_num_ctx: int | None = None
+    if profile.num_ctx and profile.num_ctx > 0:
+        resolved_num_ctx = profile.num_ctx
+    else:
+        from app.services.context_probe import get_cached_num_ctx
+
+        resolved_num_ctx = await get_cached_num_ctx(
+            db, profile.base_url or "", profile.model or ""
+        )
+
     return AiConfig(
         analysis_mode=mode,
         provider=provider,
@@ -260,6 +285,7 @@ async def load_ai_config(db: AsyncSession) -> AiConfig:
         api_key_from_db=api_key_from_db,
         embedding_model=embedding_model,
         profile_id=profile.id,
+        resolved_num_ctx=resolved_num_ctx,
     )
 
 

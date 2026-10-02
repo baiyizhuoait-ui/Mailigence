@@ -37,6 +37,10 @@ class AIProviderProfile(Base):
 
     model: Mapped[str] = mapped_column(String(120), default="")
 
+    # Manual Ollama context window override. 0 = auto (probe cache / server
+    # default); >0 always wins over the probed value.
+    num_ctx: Mapped[int] = mapped_column(Integer, default=0)
+
     # Exactly one profile has is_active=True (drives all AI calls).
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
 

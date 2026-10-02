@@ -326,6 +326,7 @@ export interface ProviderProfile {
   model: string;
   api_key_configured: boolean;
   is_active: boolean;
+  num_ctx: number;
 }
 
 export interface ProviderProfileInput {
@@ -334,10 +335,19 @@ export interface ProviderProfileInput {
   base_url: string;
   api_key: string;
   model: string;
+  num_ctx: number;
 }
 
 export interface ProviderModels {
   models: string[];
+}
+
+export interface ProbeContextResult {
+  probed_num_ctx: number;
+  model_max_context: number | null;
+  app_min_ctx: number;
+  ai_concurrency: number;
+  source: string;
 }
 
 // ---------------- AI memory ----------------

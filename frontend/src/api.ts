@@ -20,6 +20,7 @@ import type {
   ProviderModels,
   ProviderProfile,
   ProviderProfileInput,
+  ProbeContextResult,
   ProviderType,
   ReportRange,
   ReportSummary,
@@ -359,6 +360,11 @@ export const api = {
 
   probeProviderModels: (id: number) =>
     request<ProviderModels>(`/settings/provider-profiles/${id}/models`),
+
+  probeProviderContext: (id: number) =>
+    request<ProbeContextResult>(`/settings/provider-profiles/${id}/probe-context`, {
+      method: "POST",
+    }),
 
   probeAdHocModels: (payload: {
     provider_type: ProviderType;

@@ -617,10 +617,13 @@ async def _ollama_chat(
         "think": False,
         "options": {"temperature": 0, "num_predict": max_tokens},
     }
-    if settings.ai_num_ctx > 0:
-        # Small local models: raise the context window explicitly, otherwise
-        # Ollama silently truncates long prompts and returns garbage JSON.
-        body["options"]["num_ctx"] = settings.ai_num_ctx
+    # Context window priority: per-config resolved value (profile manual /
+    # probe cache) > env AI_NUM_CTX > omit (server default, e.g. Modelfile).
+    # We never force a small window at runtime — Ollama would silently
+    # truncate long prompts.
+    num_ctx = cfg.resolved_num_ctx or (settings.ai_num_ctx if settings.ai_num_ctx > 0 else None)
+    if num_ctx and num_ctx > 0:
+        body["options"]["num_ctx"] = num_ctx
     if json_mode:
         body["format"] = "json"
     base = cfg.base_url.rstrip("/")

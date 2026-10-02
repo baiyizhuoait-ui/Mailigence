@@ -68,6 +68,7 @@ async def init_db() -> None:
         email_account,
         email_category,
         import_job,
+        local_model_context_cache,
     )
 
     async with engine.begin() as conn:
@@ -100,6 +101,11 @@ async def init_db() -> None:
         await conn.exec_driver_sql(
             "ALTER TABLE app_settings "
             "ADD COLUMN IF NOT EXISTS ai_embedding_model VARCHAR(120)"
+        )
+        # Per-profile manual Ollama context window (0 = auto-probe / default).
+        await conn.exec_driver_sql(
+            "ALTER TABLE ai_provider_profiles "
+            "ADD COLUMN IF NOT EXISTS num_ctx INTEGER NOT NULL DEFAULT 0"
         )
         # AI reply-draft cache (JSON drafts + invalidation hash + timestamp).
         await conn.exec_driver_sql(

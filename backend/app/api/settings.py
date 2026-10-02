@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.ai_provider_profile import AIProviderProfile
-from app.services import ai_config, crypto
+from app.services import ai_config, context_probe, crypto
 from app.services.ai_config import load_ai_config, save_global_ai_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -102,6 +102,8 @@ class ProviderProfileIn(BaseModel):
     base_url: str = Field(default="")
     api_key: str = Field(default="")  # empty keeps the stored key on edit
     model: str = Field(default="")
+    # Manual Ollama context window; 0 = auto (probe cache / server default).
+    num_ctx: int = Field(default=0, ge=0, le=1024 * 1024)
 
 
 class ProviderProfileOut(BaseModel):
@@ -112,10 +114,19 @@ class ProviderProfileOut(BaseModel):
     model: str
     api_key_configured: bool
     is_active: bool
+    num_ctx: int = 0
 
 
 class ProviderModelsOut(BaseModel):
     models: list[str]
+
+
+class ProbeContextOut(BaseModel):
+    probed_num_ctx: int
+    model_max_context: int | None = None
+    app_min_ctx: int
+    ai_concurrency: int
+    source: str = "probed"
 
 
 class ProbeIn(BaseModel):
@@ -134,6 +145,7 @@ def _to_out(p: AIProviderProfile) -> ProviderProfileOut:
         model=p.model,
         api_key_configured=bool(p.api_key_encrypted),
         is_active=p.is_active,
+        num_ctx=int(getattr(p, "num_ctx", 0) or 0),
     )
 
 
@@ -233,6 +245,7 @@ async def create_provider_profile(
         base_url=payload.base_url,
         api_key=payload.api_key,
         model=payload.model,
+        num_ctx=payload.num_ctx,
     )
     _invalidate_schedule()
     return _to_out(profile)
@@ -257,6 +270,7 @@ async def update_provider_profile(
         base_url=payload.base_url,
         model=payload.model,
         api_key=payload.api_key,
+        num_ctx=payload.num_ctx,
     )
     _invalidate_schedule()
     return _to_out(profile)
@@ -292,6 +306,46 @@ async def probe_profile_models(
         raise HTTPException(status_code=400, detail="规则模式没有可探测的模型")
     models = await _probe_models(profile.provider_type, profile.base_url, _profile_key(profile))
     return ProviderModelsOut(models=models)
+
+
+@router.post("/provider-profiles/{profile_id}/probe-context", response_model=ProbeContextOut)
+async def probe_profile_context(
+    profile_id: int, db: AsyncSession = Depends(get_db)
+) -> ProbeContextOut:
+    """Empirically probe the largest safe context window for a local model.
+
+    Sends several real (near-app-size) test requests to the local server, so
+    this can take tens of seconds. Only local base_urls are allowed — cloud
+    endpoints have no per-request context knob and would just burn tokens.
+    The result is cached (manual re-probe overwrites) and feeds the runtime
+    num_ctx resolution when the profile has no manual value.
+    """
+    profile = await _get_profile(db, profile_id)
+    if profile.provider_type == "rules_only":
+        raise HTTPException(status_code=400, detail="规则模式没有可探测的上下文")
+    if not profile.model.strip():
+        raise HTTPException(status_code=400, detail="请先填写模型名称再探测上下文")
+    if not context_probe._is_local_base_url(profile.base_url or ""):
+        raise HTTPException(status_code=400, detail="仅支持对本地服务（localhost）探测上下文窗口")
+
+    cfg = ai_config.AiConfig(
+        provider="anthropic" if profile.provider_type == "anthropic" else "openai",
+        base_url=profile.base_url or "",
+        model=profile.model.strip(),
+    )
+    app_min_ctx = context_probe.compute_app_min_ctx()
+    probed = await context_probe.probe_safe_num_ctx(cfg, app_min_ctx)
+    model_max = await context_probe.get_model_max_context(cfg.base_url, cfg.model)
+    await context_probe.save_probed_ctx(
+        db, cfg.base_url, cfg.model, probed, model_max
+    )
+    return ProbeContextOut(
+        probed_num_ctx=probed,
+        model_max_context=model_max,
+        app_min_ctx=app_min_ctx,
+        ai_concurrency=settings.ai_concurrency,
+        source="probed",
+    )
 
 
 @router.post("/provider-profiles/probe", response_model=ProviderModelsOut)

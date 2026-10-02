@@ -13,9 +13,21 @@ import type {
   AnalysisMode,
   EmailAccount,
   EmailCategory,
+  ProbeContextResult,
   ProviderProfile,
   ProviderType,
 } from "../types";
+
+/** True when the base_url points at a local inference server (probe-able). */
+function isLocalBaseUrl(url: string): boolean {
+  const u = (url || "").toLowerCase();
+  return (
+    u.includes("localhost") ||
+    u.includes("127.0.0.1") ||
+    u.includes("[::1]") ||
+    u.includes("0.0.0.0")
+  );
+}
 
 // Preset swatches for category / account colors.
 const COLOR_PRESETS = [
@@ -60,6 +72,11 @@ export function SettingsView() {
   const [probeModels, setProbeModels] = useState<string[] | null>(null);
   const [probeLoading, setProbeLoading] = useState(false);
   const [probeErr, setProbeErr] = useState("");
+  // Context-window (num_ctx) form state.
+  const [formNumCtx, setFormNumCtx] = useState("0");
+  const [ctxProbing, setCtxProbing] = useState(false);
+  const [ctxResult, setCtxResult] = useState<ProbeContextResult | null>(null);
+  const [ctxErr, setCtxErr] = useState("");
   const [testBusy, setTestBusy] = useState<number | null>(null);
   const [testMsg, setTestMsg] = useState<{ id: number; ok: boolean; text: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<number | null>(null);
@@ -249,8 +266,11 @@ export function SettingsView() {
     setFormBaseUrl("");
     setFormModel("");
     setFormApiKey("");
+    setFormNumCtx("0");
     setProbeModels(null);
     setProbeErr("");
+    setCtxResult(null);
+    setCtxErr("");
     setFormMsg(null);
   }
 
@@ -266,8 +286,11 @@ export function SettingsView() {
     setFormBaseUrl(p.base_url);
     setFormModel(p.model);
     setFormApiKey("");
+    setFormNumCtx(String(p.num_ctx ?? 0));
     setProbeModels(null);
     setProbeErr("");
+    setCtxResult(null);
+    setCtxErr("");
     setFormMsg(null);
     setFormOpen(true);
   }
@@ -312,6 +335,7 @@ export function SettingsView() {
         base_url: formBaseUrl,
         model: formModel,
         api_key: formApiKey,
+        num_ctx: Math.max(parseInt(formNumCtx, 10) || 0, 0),
       };
       if (formProfileId === null) {
         await api.createProviderProfile(payload);
@@ -330,6 +354,34 @@ export function SettingsView() {
       });
     } finally {
       setFormBusy(false);
+    }
+  }
+
+  /** Probe the local model's safe context window (real test requests). */
+  async function probeFormContext() {
+    if (ctxProbing) return;
+    setCtxResult(null);
+    setCtxErr("");
+    if (!formModel.trim()) {
+      setCtxErr(t("settings.profile.ctxProbeNeedModel"));
+      return;
+    }
+    if (formProfileId === null) {
+      setCtxErr(t("settings.profile.ctxProbeNeedSave"));
+      return;
+    }
+    setCtxProbing(true);
+    try {
+      const result = await api.probeProviderContext(formProfileId);
+      setCtxResult(result);
+      // Fill the probed value in — still manually editable.
+      setFormNumCtx(String(result.probed_num_ctx));
+    } catch (e) {
+      setCtxErr(
+        `${t("settings.profile.ctxProbeFail")}${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setCtxProbing(false);
     }
   }
 
@@ -693,6 +745,61 @@ export function SettingsView() {
                   )}
                 </div>
               </div>
+              {isLocalBaseUrl(formBaseUrl) && formType !== "rules_only" && (
+                <div className="settings-row">
+                  <span className="settings-label">{t("settings.profile.numCtx")}</span>
+                  <div className="settings-field-group">
+                    <input
+                      className="settings-input mono"
+                      type="number"
+                      min={0}
+                      step={1024}
+                      value={formNumCtx}
+                      onChange={(e) => setFormNumCtx(e.target.value)}
+                      placeholder="0"
+                    />
+                    <span className="settings-hint">
+                      <button
+                        type="button"
+                        className="btn small ghost"
+                        onClick={probeFormContext}
+                        disabled={ctxProbing || formProfileId === null || !formModel.trim()}
+                      >
+                        {ctxProbing
+                          ? t("settings.profile.ctxProbing")
+                          : t("settings.profile.ctxProbe")}
+                      </button>
+                      {t("settings.profile.numCtxHint")}
+                    </span>
+                    {ctxResult && (
+                      <div className="probe-candidates">
+                        <span className="settings-hint">
+                          {ctxResult.model_max_context
+                            ? t("settings.profile.ctxProbeOk", {
+                                max: ctxResult.model_max_context,
+                                probed: ctxResult.probed_num_ctx,
+                              })
+                            : t("settings.profile.ctxProbeOkNoMax", {
+                                probed: ctxResult.probed_num_ctx,
+                              })}
+                        </span>
+                        {ctxResult.model_max_context &&
+                          ctxResult.probed_num_ctx < ctxResult.model_max_context && (
+                            <span className="settings-hint">
+                              {t("settings.profile.ctxVramHint")}
+                            </span>
+                          )}
+                        <span className="settings-hint">
+                          {t("settings.profile.ctxConcurrency", {
+                            n: ctxResult.ai_concurrency,
+                          })}
+                        </span>
+                      </div>
+                    )}
+                    {ctxErr && <span className="sync-result error">{ctxErr}</span>}
+                  </div>
+                </div>
+              )}
               <div className="settings-row">
                 <span className="settings-label">{t("settings.ai.apiKey")}</span>
                 <div className="settings-field-group">

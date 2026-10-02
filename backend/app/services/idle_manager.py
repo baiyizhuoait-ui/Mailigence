@@ -6,8 +6,14 @@ When ``* N EXISTS`` / ``* N RECENT`` arrives, it triggers a normal sync
 (re-using the existing ``sync_account`` flow on a *separate* connection so
 the IDLE listener stays connected) and then kicks off AI analysis.
 
-IDLE connections are refreshed every 25 minutes (RFC 2177 recommends ≤29 min).
-On error the task backs off 30 s and reconnects.
+Each connection lives for one poll window (``IDLE_POLL_TIMEOUT``): once a
+read times out, imaplib's buffered file object is unusable ("cannot read
+from timed out object"), so the task ends the cycle and reconnects fresh —
+no backoff, since a poll timeout is normal operation, not an error. Every
+(re)connect also runs a catch-up sync, so mail that arrived while no IDLE
+connection was up is picked up within one poll window at the latest; the
+``last_sync_at`` status stamp lets the background poller skip accounts
+whose IDLE loop is demonstrably alive.
 """
 from __future__ import annotations
 
@@ -22,12 +28,12 @@ from app.services.mail_sync import resolve_credential, sync_account
 
 _log = logging.getLogger(__name__)
 
-# Refresh IDLE before the typical 30-min server-side timeout (RFC 2177 §3).
-IDLE_REFRESH_SECONDS = 25 * 60
+# How long wait_idle_event blocks before returning (lets us check stop flag).
+# After this timeout the connection's buffered file is unusable, so this is
+# also the maximum lifetime of one IDLE connection.
+IDLE_POLL_TIMEOUT = 120
 # Back-off between reconnection attempts on error.
 RECONNECT_DELAY = 30
-# How long wait_idle_event blocks before returning (lets us check stop flag).
-IDLE_POLL_TIMEOUT = 120
 
 
 class IdleManager:
@@ -54,6 +60,7 @@ class IdleManager:
             self._status[account_id] = {
                 "running": False,
                 "last_event_at": None,
+                "last_sync_at": None,
                 "events": 0,
                 "last_sync_count": 0,
                 "error": "polling_only",
@@ -67,6 +74,7 @@ class IdleManager:
         self._status[account_id] = {
             "running": True,
             "last_event_at": None,
+            "last_sync_at": None,
             "events": 0,
             "last_sync_count": 0,
             "error": "",
@@ -95,8 +103,8 @@ class IdleManager:
     def get_status(self, account_id: int) -> dict:
         return self._status.get(
             account_id,
-            {"running": False, "last_event_at": None, "events": 0,
-             "last_sync_count": 0, "error": ""},
+            {"running": False, "last_event_at": None, "last_sync_at": None,
+             "events": 0, "last_sync_count": 0, "error": ""},
         )
 
     def get_all_status(self) -> dict[int, dict]:
@@ -127,7 +135,13 @@ class IdleManager:
                     await asyncio.sleep(1)
 
     async def _run_one_cycle(self, account_id: int) -> None:
-        """One connect → IDLE → listen → disconnect cycle."""
+        """One connect → catch-up sync → IDLE listen → disconnect cycle.
+
+        The cycle ends after one poll window without an event: the read
+        timeout leaves imaplib's buffered file unusable, so the connection
+        is retired instead of waiting for the next call to explode. ``_run``
+        immediately reconnects (no backoff — a timeout is normal operation).
+        """
         async with SessionLocal() as db:
             account = await db.get(EmailAccount, account_id)
         if account is None:
@@ -148,36 +162,41 @@ class IdleManager:
             _log.info("IDLE connected for account %d (%s)", account_id, account.email)
             self._set_error(account_id, "")
 
+            # Catch-up sync on every (re)connect: picks up anything that
+            # arrived while no IDLE connection was listening (e.g. during the
+            # reconnect gap), and stamps last_sync_at so the background
+            # poller can trust this account's freshness.
+            await self._sync_new_mail(account_id)
+
             while account_id not in self._stop_flags:
                 event = await self._idle_round(
-                    client, account_id, IDLE_REFRESH_SECONDS
+                    client, account_id, IDLE_POLL_TIMEOUT
                 )
                 if account_id in self._stop_flags:
                     break
                 if event and ("EXISTS" in event or "RECENT" in event):
                     self._record_event(account_id)
                     await self._sync_new_mail(account_id)
+                    continue
+                # Poll window elapsed with no event — the socket's buffered
+                # file object is unusable after a read timeout (imaplib
+                # limitation), so retire the connection; _run reconnects.
+                return
         finally:
             await asyncio.to_thread(client.logout)
 
     async def _idle_round(
         self, client: ImapClient, account_id: int, max_wait: float
     ) -> str | None:
-        """One IDLE start → wait → stop cycle, split into short polls.
+        """One IDLE start → wait → stop cycle.
 
-        Splits the refresh interval into shorter polls so the stop flag is
-        checked promptly.
+        Blocks up to ``max_wait`` seconds for a server-pushed event. Returns
+        the event line, or ``None`` when the window elapsed with no event
+        (the caller must then retire the connection — see ``_run_one_cycle``).
         """
         await asyncio.to_thread(client.start_idle)
         try:
-            deadline = max_wait
-            while deadline > 0 and account_id not in self._stop_flags:
-                wait = min(IDLE_POLL_TIMEOUT, deadline)
-                event = await asyncio.to_thread(client.wait_idle_event, wait)
-                if event:
-                    return event
-                deadline -= wait
-            return None
+            return await asyncio.to_thread(client.wait_idle_event, max_wait)
         finally:
             await asyncio.to_thread(client.stop_idle)
 
@@ -193,7 +212,11 @@ class IdleManager:
                 # Sync last 1 day — new mail just arrived.
                 since = date.today() - timedelta(days=1)
                 count = await sync_account(db, account, since=since)
-                self._status.setdefault(account_id, {})["last_sync_count"] = count
+                st = self._status.setdefault(account_id, {})
+                st["last_sync_count"] = count
+                # Stamp liveness so the background poller can skip this
+                # account (see main._background_sync_loop).
+                st["last_sync_at"] = datetime.now(timezone.utc).isoformat()
                 _log.info(
                     "IDLE sync: %d new mail(s) for account %d", count, account_id
                 )

@@ -465,6 +465,36 @@ class ImapClient:
         self.select_folder(target[1])
         return target[0]
 
+    def find_folder_raw(self, decoded_name: str) -> str | None:
+        """Return the raw folder name whose decoded form matches ``decoded_name``.
+
+        ``list_folders`` returns decoded (human-readable) names, but IMAP
+        SELECT must use the raw modified-UTF-7 form the server expects
+        (163 requires ``SELECT "&XfJT0ZAB-"``, not ``SELECT "已发送"``).
+        Matching is case-insensitive and also matches by ``/``-path suffix so
+        ``All Mail`` finds ``[Gmail]/All Mail``. Folders flagged ``\\Noselect``
+        (containers that cannot be SELECTed) are skipped.
+        """
+        assert self._conn is not None
+        typ, data = self._conn.list()
+        if typ != "OK":
+            return None
+        want = decoded_name.strip().lower()
+        for item in data:
+            if not isinstance(item, (bytes, bytearray)):
+                continue
+            text = bytes(item).decode("utf-8", errors="replace")
+            if "\\Noselect" in text:
+                continue
+            quoted = re.findall(r'"((?:[^"\\]|\\.)*)"', text)
+            if not quoted:
+                continue
+            raw = quoted[-1].replace('\\"', '"').replace("\\\\", "\\")
+            decoded = _decode_modified_utf7(raw).lower()
+            if decoded == want or decoded.endswith("/" + want):
+                return raw
+        return None
+
     # -- fetch + parse --------------------------------------------------------
 
     def fetch_normalised(
@@ -690,18 +720,47 @@ class ImapClient:
     def _parse_fetch_response(
         data, direction: MailDirection = MailDirection.INBOX
     ) -> list[NormalisedMail]:
-        """imaplib returns a list of alternating (meta, bytes) tuples + b')'."""
-        mails: list[NormalisedMail] = []
-        # data looks like: [ (b'1 (UID.. INTERNALDATE .. FLAGS (..))', b'<raw>'), b')', ... ]
+        """imaplib returns a list of alternating (meta, bytes) tuples + b')'.
+
+        Standard servers put UID/FLAGS/INTERNALDATE in the tuple's meta part:
+
+            [(b'1 (UID 101 INTERNALDATE "..." FLAGS (\\Seen))', b'<raw>'), b')']
+
+        QQ (imap.qq.com) instead appends FLAGS/INTERNALDATE *after* the body
+        literal as a separate bare item, which imaplib yields as a standalone
+        bytes element following the tuple:
+
+            [(b'19 (UID 21 BODY[] {2180823}', b'<raw>'),
+             b' FLAGS (\\Seen) INTERNALDATE "02-Oct-2026 09:55:12 +0800")',
+             b')']
+
+        Bare non-closer items are therefore spliced onto the preceding tuple's
+        meta before parsing. Dropping them used to leave every QQ message with
+        ``received_at=NULL``, sinking all QQ mail to the bottom of date-sorted
+        lists (nulls-last) — the newest messages appeared to never arrive.
+        """
+        pairs: list[tuple[str, bytes]] = []
         for item in data:
-            if not isinstance(item, tuple) or len(item) != 2:
-                continue
-            meta, raw = item
-            meta_str = meta.decode("utf-8", errors="replace") if isinstance(meta, bytes) else str(meta)
-            if not isinstance(raw, (bytes, bytearray)):
-                continue
+            if isinstance(item, tuple) and len(item) == 2:
+                meta, raw = item
+                meta_str = (
+                    meta.decode("utf-8", errors="replace")
+                    if isinstance(meta, bytes)
+                    else str(meta)
+                )
+                if isinstance(raw, (bytes, bytearray)):
+                    pairs.append((meta_str, bytes(raw)))
+            elif isinstance(item, (bytes, bytearray)):
+                tail = bytes(item).decode("utf-8", errors="replace")
+                if not tail.strip() or tail.strip() == ")":
+                    continue  # closing paren / empty filler of the FETCH reply
+                if pairs and ("FLAGS" in tail or "INTERNALDATE" in tail):
+                    meta_str, raw = pairs[-1]
+                    pairs[-1] = (meta_str + tail, raw)
+        mails: list[NormalisedMail] = []
+        for meta_str, raw in pairs:
             try:
-                mails.append(ImapClient._parse_one(meta_str, bytes(raw), direction))
+                mails.append(ImapClient._parse_one(meta_str, raw, direction))
             except Exception:
                 # Skip a single malformed message rather than failing the whole sync.
                 continue

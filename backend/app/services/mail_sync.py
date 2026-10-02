@@ -13,6 +13,7 @@ stored rows — kept out of Stage 1 to keep concerns isolated.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -25,6 +26,8 @@ from app.models.email import UnifiedEmail
 from app.models.email_account import AuthType, EmailAccount, SyncStatus
 from app.services import crypto, ms_graph, oauth
 from app.services.imap_client import ImapClient, NormalisedMail, open_connection
+
+_log = logging.getLogger(__name__)
 
 
 # --- credential resolution --------------------------------------------------
@@ -229,49 +232,119 @@ async def _sync_account_graph(
 async def _sync_account_imap(
     db: AsyncSession, account: EmailAccount, *, since: date, limit: Optional[int] = None
 ) -> int:
-    """Original IMAP sync path (all non-Microsoft-OAuth accounts)."""
+    """Original IMAP sync path (all non-Microsoft-OAuth accounts).
+
+    Syncs INBOX plus platform-specific folders that hold inbound mail the
+    server auto-sorted out of INBOX (NetEase 广告邮件/订阅邮件, Gmail All
+    Mail — Gmail hides its Promotions/Social labels from IMAP). Failures on
+    a single folder are logged and skipped so one broken folder cannot block
+    the rest.
+    """
     credential = await resolve_credential(account)
     client = await open_connection(account, credential)
+    total = 0
     try:
-        await asyncio.to_thread(client.select_folder, "INBOX")
-        uids = await asyncio.to_thread(client.search_since, since)
-        if limit:
-            uids = uids[-limit:]  # most recent N
-
-        # Skip already-imported messages: fetch only Message-ID headers
-        # (fast), then filter out UIDs whose Message-ID is already in DB.
-        existing_uids: list[str] = []
-        if uids:
-            uid_to_mid = await asyncio.to_thread(
-                client.fetch_message_ids, uids
-            )
-            existing_result = await db.execute(
-                select(UnifiedEmail.message_id).where(
-                    UnifiedEmail.account_id == account.id
+        folders: list[tuple[str, str]] = [("INBOX", "INBOX")]
+        for name in _extra_folders_for(account.platform):
+            raw = await asyncio.to_thread(client.find_folder_raw, name)
+            if raw:
+                folders.append((name, raw))
+            else:
+                _log.info(
+                    "Extra folder %r not found on %s, skipping", name, account.email
                 )
+        for decoded, raw in folders:
+            total += await _sync_imap_folder(
+                db, account, client, raw, is_inbox=(decoded == "INBOX"),
+                since=since, limit=limit,
             )
-            existing_mids = {r[0] for r in existing_result.all() if r[0]}
-            existing_uids = [
-                u
-                for u in uids
-                if uid_to_mid.get(u, f"synthetic:{u}") in existing_mids
-            ]
-            uids = [
-                u
-                for u in uids
-                if uid_to_mid.get(u, f"synthetic:{u}") not in existing_mids
-            ]
-
-        mails: list[NormalisedMail] = []
-        if uids:
-            mails = await asyncio.to_thread(client.fetch_normalised, uids)
-        # Messages already in the DB were deduped out of the full fetch,
-        # so their is_read may be stale — reconcile it from live FLAGS.
-        if existing_uids:
-            flags = await asyncio.to_thread(client.fetch_flags, existing_uids)
-            await apply_read_flags(db, account.id, uid_to_mid, flags)
     finally:
         await asyncio.to_thread(client.logout)
+    return total
+
+
+# Folders that hold inbound mail but sit outside INBOX, per platform family.
+# NetEase (163/126/188/yeah) auto-sorts promotional/subscription mail into
+# dedicated folders — without syncing them, fresh ad/subscription mail never
+# reaches the dashboard even though the server has it.
+# Gmail exposes no per-category folders over IMAP, so All Mail is the only
+# superset; duplicates against INBOX are removed by the message_id upsert.
+_EXTRA_SYNC_FOLDERS: dict[str, list[str]] = {
+    "netease": ["广告邮件", "订阅邮件"],
+    "gmail": ["All Mail", "所有邮件"],
+}
+
+
+def _extra_folders_for(platform: str) -> list[str]:
+    p = (platform or "").lower()
+    if p.startswith("netease"):
+        return _EXTRA_SYNC_FOLDERS["netease"]
+    if p == "gmail":
+        return _EXTRA_SYNC_FOLDERS["gmail"]
+    return []
+
+
+async def _sync_imap_folder(
+    db: AsyncSession,
+    account: EmailAccount,
+    client: ImapClient,
+    folder_raw: str,
+    *,
+    is_inbox: bool = False,
+    since: date,
+    limit: Optional[int] = None,
+) -> int:
+    """Sync one folder into ``unified_emails``. Returns the upsert count."""
+    try:
+        await asyncio.to_thread(client.select_folder, folder_raw)
+    except Exception as exc:
+        _log.warning(
+            "Skip folder %r for %s: select failed (%s)", folder_raw, account.email, exc
+        )
+        return 0
+
+    uids = await asyncio.to_thread(client.search_since, since)
+    if limit:
+        uids = uids[-limit:]  # most recent N
+
+    # Skip already-imported messages: fetch only Message-ID headers
+    # (fast), then filter out UIDs whose Message-ID is already in DB.
+    existing_uids: list[str] = []
+    mails: list[NormalisedMail] = []
+    uid_to_mid: dict[str, str] = {}
+    if uids:
+        uid_to_mid = await asyncio.to_thread(
+            client.fetch_message_ids, uids
+        )
+        existing_result = await db.execute(
+            select(UnifiedEmail.message_id).where(
+                UnifiedEmail.account_id == account.id
+            )
+        )
+        existing_mids = {r[0] for r in existing_result.all() if r[0]}
+        existing_uids = [
+            u
+            for u in uids
+            if uid_to_mid.get(u, f"synthetic:{u}") in existing_mids
+        ]
+        uids = [
+            u
+            for u in uids
+            if uid_to_mid.get(u, f"synthetic:{u}") not in existing_mids
+        ]
+
+    if uids:
+        mails = await asyncio.to_thread(client.fetch_normalised, uids)
+        # All Mail (Gmail) also contains sent mail and drafts — every message
+        # "from me" is outbound, not inbound, so drop it for non-INBOX folders.
+        if not is_inbox:
+            my_addr = account.email.lower()
+            mails = [m for m in mails if (m.sender_email or "").lower() != my_addr]
+    # Messages already in the DB were deduped out of the full fetch,
+    # so their is_read may be stale — reconcile it from live FLAGS.
+    if existing_uids:
+        flags = await asyncio.to_thread(client.fetch_flags, existing_uids)
+        await apply_read_flags(db, account.id, uid_to_mid, flags)
 
     return await upsert_mails(db, account, mails)
 

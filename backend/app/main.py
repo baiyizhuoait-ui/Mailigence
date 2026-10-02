@@ -9,7 +9,7 @@ import asyncio
 import logging
 import traceback
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -93,8 +93,34 @@ async def _embedding_sweep_loop() -> None:
         await asyncio.sleep(ANALYSIS_SWEEP_SECONDS)
 
 
+# An IDLE loop counts as "fresh" — i.e. the background poller may skip the
+# account — only if it synced successfully this recently. Anything older
+# (IDLE silently stuck, erroring, or never synced) falls back to polling.
+IDLE_FRESH_MINUTES = 10
+
+
+def _idle_loop_is_fresh(status: dict, now: datetime) -> bool:
+    if not status.get("running") or status.get("error"):
+        return False
+    last_sync = status.get("last_sync_at")
+    if not last_sync:
+        return False
+    try:
+        age = (now - datetime.fromisoformat(last_sync)).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age < IDLE_FRESH_MINUTES * 60
+
+
 async def _background_sync_loop() -> None:
-    """Periodically sync all accounts as a fallback for non-IDLE servers."""
+    """Periodically sync all accounts as a fallback for non-IDLE servers.
+
+    Skips an account only when its IDLE loop is running, error-free, and has
+    demonstrably synced within ``IDLE_FRESH_MINUTES`` (stamped by the IDLE
+    manager on every successful sync pass). The old check (``running and no
+    error``) trusted an IDLE connection that could sit idle-spinning forever
+    without ever syncing, leaving mail un-fetched for unbounded time.
+    """
     await asyncio.sleep(10)  # let startup settle
     while True:
         try:
@@ -102,10 +128,9 @@ async def _background_sync_loop() -> None:
                 result = await db.execute(select(EmailAccount))
                 acct_list = list(result.scalars().all())
                 since = date.today() - timedelta(days=1)
+                now = datetime.now(timezone.utc)
                 for acct in acct_list:
-                    # Skip accounts where IDLE is actively running.
-                    status = idle_manager.get_status(acct.id)
-                    if status.get("running") and not status.get("error"):
+                    if _idle_loop_is_fresh(idle_manager.get_status(acct.id), now):
                         continue
                     try:
                         count = await mail_sync.sync_account(db, acct, since=since)

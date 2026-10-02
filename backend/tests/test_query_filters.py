@@ -123,17 +123,22 @@ def _delete_mail(email_id: int) -> None:
 
 
 def test_category_stats_material_aggregates_by_sender():
-    id_a1 = _insert_temp_mail("marketing", "Ads Sender A", "ads.a@example.com", "Buy now 1")
-    id_a2 = _insert_temp_mail("marketing", "Ads Sender A", "ads.a@example.com", "Buy now 2")
-    id_b = _insert_temp_mail("marketing", "Ads Sender B", "ads.b@example.com", "Sale ends")
+    # Insert into a far-past date window so real mailbox data can never
+    # crowd the temp senders out of the top-15 aggregate.
+    old = datetime(2001, 1, 1, 12, 0, tzinfo=timezone.utc)
+    id_a1 = _insert_temp_mail("marketing", "Ads Sender A", "ads.a@example.com", "Buy now 1", received_at=old)
+    id_a2 = _insert_temp_mail("marketing", "Ads Sender A", "ads.a@example.com", "Buy now 2", received_at=old)
+    id_b = _insert_temp_mail("marketing", "Ads Sender B", "ads.b@example.com", "Sale ends", received_at=old)
     try:
         async def _run():
             async with SessionLocal() as db:
-                return await _category_stats_material(db, "marketing", None, None)
+                return await _category_stats_material(
+                    db, "marketing", "2001-01-01", "2001-01-01"
+                )
         text = asyncio.run(_run())
         assert "ads.a@example.com" in text
         assert "ads.b@example.com" in text
-        assert "共" in text and "3 封" in text  # at least the 3 temp mails counted
+        assert "共 3 封" in text  # exactly the 3 temp mails in this window
     finally:
         _delete_mail(id_a1)
         _delete_mail(id_a2)
@@ -199,3 +204,33 @@ def test_filtered_retrieval_passes_filters(monkeypatch):
     assert len(search_calls) >= 1
     assert search_calls[0]["category"] == "marketing"  # filter parsed by rules
     assert search_calls[0]["date_from"] is None  # no time phrase in the query
+
+
+def test_prompt_injects_current_time(monkeypatch):
+    """The QA prompt must carry today's UTC date so relative days (前天) map
+    onto the UTC dates shown in materials — local and cloud models alike."""
+    captured: dict = {}
+
+    async def _fake_search(db, q, limit=15, offset=0, **kwargs):
+        return [], 0
+
+    async def _fake_llm(cfg, system_prompt, user_content, local):
+        captured["user_content"] = user_content
+        return "好的 ---CITED_IDS--- []"
+
+    monkeypatch.setattr(chat_qa_service, "search_emails", _fake_search)
+    monkeypatch.setattr(chat_qa_service, "_call_llm", _fake_llm)
+
+    cfg = AiConfig()
+
+    async def _run():
+        async with SessionLocal() as db:
+            return await chat_qa(db, cfg, "前天有什么重要邮件")
+
+    asyncio.run(_run())
+    prompt = captured["user_content"]
+    assert "（〇）当前时间" in prompt
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert today in prompt
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    assert yesterday in prompt

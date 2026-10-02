@@ -65,6 +65,9 @@ SYSTEM_PROMPT = """你是用户的邮件助理。你只能根据下面提供的�
 
 USER_PROMPT_TEMPLATE = """用户问题：{query}
 
+（〇）当前时间：
+{now_context}
+
 （一）邮箱概况：
 {stats_context}
 
@@ -81,6 +84,30 @@ USER_PROMPT_TEMPLATE = """用户问题：{query}
 {history}
 
 请回答用户问题。"""
+
+_WEEKDAYS_CN = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
+_CST = timezone(timedelta(hours=8))
+
+
+def _now_context() -> str:
+    """Current-time block injected into every QA prompt.
+
+    LLMs have no clock — without this, "前天/昨天" questions make even a
+    correct retrieval window useless because the model can't map the
+    relative day onto the UTC dates shown in the materials. Dates here
+    follow the project-wide UTC convention (query_filters._utc_today,
+    _compute_stats) so the model's conversion aligns with the SQL window.
+    """
+    now_utc = datetime.now(timezone.utc)
+    now_cst = now_utc.astimezone(_CST)
+    return (
+        f"UTC 今天是 {now_utc:%Y-%m-%d}（{_WEEKDAYS_CN[now_utc.weekday()]}），"
+        f"UTC 今天往前推 1 天是 {(now_utc - timedelta(days=1)):%Y-%m-%d}，"
+        f"2 天是 {(now_utc - timedelta(days=2)):%Y-%m-%d}；"
+        f"北京时间 {now_cst:%Y-%m-%d %H:%M}。"
+        "材料中的邮件日期均为 UTC 日期；用户提到“今天/昨天/前天/本周”等相对时间时，"
+        "先按上面的日期换算成具体日期，再对照材料回答，不要回答说材料中没有日期。"
+    )
 
 # Tiny pre-retrieval planner: classify + extract search keywords.
 _PLANNER_SYSTEM = """你是检索规划器。分析用户关于邮箱的提问，只返回JSON对象（无markdown、无额外文字）：
@@ -560,6 +587,7 @@ async def chat_qa(
 
     user_content = USER_PROMPT_TEMPLATE.format(
         query=query,
+        now_context=_now_context(),
         stats_context=stats_context,
         important_list=important_list,
         fragments=fragments,

@@ -15,12 +15,16 @@ export type AccentColor =
   | "teal" | "indigo" | "pink" | "orange" | "cyan" | "slate"
   | "custom";
 
+/** Boot splash variant, read by src/boot.ts straight off localStorage. */
+export type BootMode = "off" | "simple" | "full";
+
 export interface Settings {
   lang: Lang;
   theme: ThemeMode;
   accent: AccentColor;
   /** Custom accent hex (used when accent === "custom"). */
   customAccent?: string;
+  bootMode: BootMode;
 }
 
 // ---------------- Accent presets ----------------
@@ -160,6 +164,11 @@ const zh: Dict = {
   "settings.theme.dark": "深色",
   "settings.theme.light": "浅色",
   "settings.accent": "主题色",
+  "settings.boot": "启动动画",
+  "settings.boot.off": "关闭",
+  "settings.boot.simple": "简约",
+  "settings.boot.full": "完整",
+  "settings.boot.hint": "下次打开页面时生效",
   "settings.language": "语言",
   "settings.language.zh": "中文",
   "settings.language.en": "English",
@@ -630,6 +639,11 @@ const en: Dict = {
   "settings.theme.dark": "Dark",
   "settings.theme.light": "Light",
   "settings.accent": "Accent color",
+  "settings.boot": "Boot animation",
+  "settings.boot.off": "Off",
+  "settings.boot.simple": "Minimal",
+  "settings.boot.full": "Full",
+  "settings.boot.hint": "Applies on next page load",
   "settings.language": "Language",
   "settings.language.zh": "中文",
   "settings.language.en": "English",
@@ -988,6 +1002,8 @@ interface I18nContextValue {
   setTheme: (t: ThemeMode) => void;
   setAccent: (a: AccentColor) => void;
   setCustomAccent: (hex: string) => void;
+  bootMode: BootMode;
+  setBootMode: (m: BootMode) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
 }
 
@@ -1005,12 +1021,19 @@ function loadSettings(): Settings {
         theme: parsed.theme ?? "dark",
         accent: parsed.accent ?? "amber",
         customAccent: parsed.customAccent || "",
+        bootMode: parsed.bootMode ?? "full",
       };
     }
   } catch {
     /* ignore */
   }
-  return { lang: "en", theme: "dark", accent: "amber", customAccent: "" };
+  return {
+    lang: "en",
+    theme: "dark",
+    accent: "amber",
+    customAccent: "",
+    bootMode: "full",
+  };
 }
 
 function saveSettings(s: Settings) {
@@ -1069,6 +1092,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     setAccent: (accent) => setSettings((s) => ({ ...s, accent })),
     setCustomAccent: (hex) =>
       setSettings((s) => ({ ...s, accent: "custom", customAccent: hex })),
+    bootMode: settings.bootMode,
+    setBootMode: (bootMode) => setSettings((s) => ({ ...s, bootMode })),
     t: (key: string, params?: Record<string, string | number>) => {
       let text: string = DICTS[settings.lang][key] ?? key;
       if (params) {

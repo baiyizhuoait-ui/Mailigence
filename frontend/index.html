@@ -6,8 +6,6 @@
     <title>Mailigence · 邮件聚合分析</title>
     <!-- System fonts only: no external CDN dependency (Google Fonts is
          unreachable behind some networks and causes ERR_ABORTED). -->
-  </head>
-  <body>
     <script>
       // Apply saved theme before React mounts to prevent FOUC.
       (function () {
@@ -20,6 +18,1062 @@
           document.documentElement.setAttribute("data-accent", "amber");
         }
       })();
+    </script>
+    <!-- ===================== Boot splash (CRT intro) =====================
+         Two phases, ported from the 550C reference (assets/550C-source.html):
+           phase 1  the vector mark is wiped in shape by shape;
+           phase 2  the full CRT desktop — top/bottom HUD bars plus four
+                    bordered windows and a floating summary popup — takes over
+                    and runs the REAL load steps in its CORE TERMINAL.
+         src/boot.ts drives all of it. Palette: the --bt-* values below re-skin
+         the whole intro.
+
+         Three variants, chosen by the saved bootMode (Settings ▸ Appearance):
+           off     the overlay is dropped before first paint (script at the
+                   bottom of this file), so nothing ever shows;
+           simple  the minimal variant below — the app's own theme tokens, no
+                   CRT chrome — for everyday use;
+           full    the CRT intro described above (default).
+         The script at the bottom of <body> stamps data-mode on #boot so the
+         right variant is on screen from the very first frame. -->
+    <style>
+      :root {
+        --bt-amber: #e8a020;
+        --bt-amber-b: #ffc043;
+        --bt-amber-d: #8a5e10;
+        --bt-amber-fade: rgba(232, 160, 32, 0.35);
+        --bt-text: #d8c090;
+        --bt-dim: #8a7248;
+        --bt-faint: #4a3f28;
+        --bt-panel: #0a0805;
+        --bt-win: #0d0a06;
+        --bt-red: #e05030;
+        --bt-red-b: #ff7050;
+        --bt-green: #b8c840;
+        --bt-cyan: #4fd1c5;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483000;
+        overflow: hidden;
+        background: #000;
+        opacity: 1;
+        transition: opacity 0.55s ease;
+        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas,
+          "Courier New", monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+      #boot.boot-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      /* CRT scanlines, painted above everything — same recipe as the reference. */
+      #boot::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 9;
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0.025) 0,
+          rgba(255, 255, 255, 0.025) 1px,
+          transparent 1px,
+          transparent 4px
+        );
+      }
+      #boot::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 8;
+        pointer-events: none;
+        background: radial-gradient(
+          ellipse at center,
+          transparent 45%,
+          rgba(0, 0, 0, 0.85) 100%
+        );
+      }
+
+      /* ============ phase 1 — the vector mark ============ */
+      .bt-stage {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        transition: opacity 0.5s ease;
+      }
+      .bt-stage.bt-gone {
+        opacity: 0;
+      }
+      .bt-stage svg {
+        width: min(720px, 92vw);
+        height: auto;
+        overflow: visible;
+      }
+      .bt-ghost {
+        fill: #fff;
+        stroke: none;
+      }
+      .bt-notch {
+        fill: none;
+        stroke: #000;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .bt-accent {
+        fill: #ff2d2d;
+        stroke: none;
+      }
+      /* The wordmark is solid type: glow it with a shadow rather than the
+         despike threshold filter, which would eat the letterform edges. */
+      #bt-word .bt-ghost,
+      #bt-word .bt-accent {
+        filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.35));
+      }
+      #bt-logo.finished .bt-ghost,
+      #bt-logo.finished .bt-notch {
+        animation: btGlowW 2.6s ease-in-out infinite;
+      }
+      #bt-logo.finished .bt-accent {
+        animation: btGlowR 2.6s ease-in-out infinite;
+      }
+      @keyframes btGlowW {
+        0%,
+        100% {
+          filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.5));
+        }
+        50% {
+          filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.9));
+        }
+      }
+      @keyframes btGlowR {
+        0%,
+        100% {
+          filter: drop-shadow(0 0 8px rgba(255, 45, 45, 0.6));
+        }
+        50% {
+          filter: drop-shadow(0 0 18px rgba(255, 45, 45, 1));
+        }
+      }
+      .bt-caption {
+        color: rgba(255, 255, 255, 0.35);
+        font-size: 12px;
+        letter-spacing: 0.4em;
+        padding-left: 0.4em;
+        opacity: 0;
+      }
+      .bt-caption.show {
+        animation: btFadeIn 0.6s ease forwards;
+      }
+      .bt-cursor {
+        display: inline-block;
+        width: 6px;
+        height: 12px;
+        margin-left: 8px;
+        vertical-align: -2px;
+        background: #fff;
+        animation: btBlink 1s steps(1) infinite;
+      }
+      @keyframes btBlink {
+        0%,
+        49% {
+          opacity: 1;
+        }
+        50%,
+        100% {
+          opacity: 0;
+        }
+      }
+      @keyframes btFadeIn {
+        to {
+          opacity: 1;
+        }
+      }
+
+      /* ============ phase 2 — the CRT desktop ============ */
+      #bt-desktop {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        display: grid;
+        grid-template-rows: 26px 1fr 24px;
+        gap: 5px;
+        padding: 6px;
+        color: var(--bt-text);
+        opacity: 0;
+        transition: opacity 0.6s ease;
+      }
+      #bt-desktop.bt-in {
+        opacity: 1;
+      }
+      .bt-hud {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 10px;
+        background: linear-gradient(180deg, #141008, #0a0805);
+        border: 1px solid var(--bt-amber-d);
+        font-size: 10.5px;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--bt-amber);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .bt-hud-bot {
+        background: linear-gradient(180deg, #0d0a06, #050403);
+        color: var(--bt-dim);
+        font-size: 9.5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .bt-hud .bt-brand {
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        text-shadow: 0 0 8px var(--bt-amber-fade);
+      }
+      .bt-hud .bt-sep {
+        color: var(--bt-faint);
+      }
+      .bt-hud .bt-item {
+        color: var(--bt-dim);
+      }
+      .bt-hud .bt-item b {
+        color: var(--bt-amber);
+        font-weight: 400;
+      }
+      .bt-hud-bot .bt-item b {
+        color: var(--bt-amber);
+        font-weight: 400;
+      }
+      .bt-spacer {
+        flex: 1;
+      }
+      .bt-live {
+        color: var(--bt-red) !important;
+        animation: btBlink 1s steps(1) infinite;
+      }
+      .bt-work {
+        display: grid;
+        grid-template-columns: 1fr 1.7fr 1fr;
+        grid-template-rows: 1.1fr 1fr;
+        grid-template-areas: "tele main code" "tele main node";
+        gap: 5px;
+        min-height: 0;
+      }
+      .bt-w {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--bt-panel);
+        border: 1px solid var(--bt-amber-d);
+        box-shadow: inset 0 0 30px rgba(232, 160, 32, 0.03);
+        opacity: 0;
+        transform: translateY(6px);
+        animation: btWinIn 0.4s ease forwards;
+      }
+      @keyframes btWinIn {
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      /* Corner brackets — the reference's .w::before / .w::after ticks. */
+      .bt-w::before,
+      .bt-w::after {
+        content: "";
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        border-color: var(--bt-amber);
+        z-index: 5;
+        pointer-events: none;
+      }
+      .bt-w::before {
+        top: -1px;
+        left: -1px;
+        border-top: 2px solid;
+        border-left: 2px solid;
+      }
+      .bt-w::after {
+        bottom: -1px;
+        right: -1px;
+        border-bottom: 2px solid;
+        border-right: 2px solid;
+      }
+      .bt-tele {
+        grid-area: tele;
+      }
+      .bt-main {
+        grid-area: main;
+      }
+      .bt-code {
+        grid-area: code;
+      }
+      .bt-node {
+        grid-area: node;
+      }
+      .bt-w-head {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 8px;
+        background: linear-gradient(180deg, #161006, #0a0805);
+        border-bottom: 1px solid var(--bt-amber-d);
+        font-size: 9.5px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--bt-amber);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .bt-led {
+        width: 6px;
+        height: 6px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--bt-green);
+        box-shadow: 0 0 6px var(--bt-green);
+        animation: btPulse 1.2s infinite;
+      }
+      .bt-led-red {
+        background: var(--bt-red);
+        box-shadow: 0 0 6px var(--bt-red);
+      }
+      @keyframes btPulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.25;
+        }
+      }
+      .bt-w-body {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        padding: 6px 8px;
+        font-size: 11px;
+        line-height: 1.55;
+      }
+      .bt-sect {
+        font-size: 9px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--bt-amber-d);
+        padding: 6px 0 3px;
+        border-bottom: 1px dotted var(--bt-amber-fade);
+        margin-bottom: 3px;
+      }
+      .bt-sect:first-child {
+        padding-top: 0;
+      }
+      .bt-dt {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 2px 8px;
+        padding: 1px 0;
+        font-size: 10.5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .bt-dt .k {
+        color: var(--bt-faint);
+        letter-spacing: 0.05em;
+      }
+      .bt-dt .v {
+        color: var(--bt-text);
+        text-align: right;
+      }
+      .bt-dt .v.ok {
+        color: var(--bt-green);
+      }
+      .bt-dt .v.warn {
+        color: var(--bt-amber-b);
+      }
+      .bt-dt .v.bad {
+        color: var(--bt-red);
+      }
+      #bt-term {
+        font-size: 11.5px;
+        line-height: 1.6;
+      }
+      .bt-ln {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .bt-ln.sys {
+        color: var(--bt-amber);
+      }
+      .bt-ln.inf {
+        color: var(--bt-dim);
+      }
+      .bt-ln.ok {
+        color: var(--bt-green);
+      }
+      .bt-ln.warn {
+        color: var(--bt-amber-b);
+      }
+      .bt-ln.bad {
+        color: var(--bt-red);
+      }
+      .bt-ln.cmd {
+        color: #fff;
+        font-weight: 500;
+      }
+      .bt-ln .ts {
+        color: var(--bt-faint);
+      }
+      #bt-code {
+        font-size: 10.5px;
+        line-height: 1.45;
+        font-variant-numeric: tabular-nums;
+        white-space: pre;
+        overflow: hidden;
+      }
+      .bt-cln {
+        color: #a88c50;
+      }
+      .bt-cln.cm {
+        color: var(--bt-faint);
+      }
+      #bt-nodes {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+        gap: 6px 4px;
+        padding: 2px;
+      }
+      .bt-node-cell {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        padding: 2px 0;
+        transition: all 0.3s;
+      }
+      .bt-node-cell svg {
+        width: 26px;
+        height: 26px;
+        color: var(--bt-red);
+        filter: drop-shadow(0 0 3px rgba(224, 80, 48, 0.6));
+        transition: filter 0.3s, color 0.3s;
+      }
+      .bt-node-cell .id {
+        font-size: 7.5px;
+        letter-spacing: 0.05em;
+        color: var(--bt-faint);
+        transition: color 0.3s;
+      }
+      .bt-node-cell .st {
+        font-size: 6.5px;
+        letter-spacing: 0.05em;
+        color: var(--bt-red);
+        transition: color 0.3s;
+      }
+      .bt-node-cell.done svg {
+        color: var(--bt-green);
+        filter: drop-shadow(0 0 6px rgba(184, 200, 64, 0.8));
+      }
+      .bt-node-cell.done .id,
+      .bt-node-cell.done .st {
+        color: var(--bt-green);
+      }
+      .bt-node-cell.busy svg {
+        color: var(--bt-amber-b);
+        animation: btNodePulse 0.5s infinite alternate;
+        filter: drop-shadow(0 0 7px rgba(255, 192, 67, 1));
+      }
+      .bt-node-cell.busy .st {
+        color: var(--bt-amber-b);
+      }
+      @keyframes btNodePulse {
+        from {
+          opacity: 0.4;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      .bt-prog {
+        flex: 0 0 220px;
+        height: 8px;
+        background: #050403;
+        border: 1px solid var(--bt-amber-d);
+        position: relative;
+        overflow: hidden;
+      }
+      .bt-prog .bt-fill {
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, var(--bt-amber-d), var(--bt-amber-b));
+        box-shadow: 0 0 8px var(--bt-amber-fade);
+        transition: width 0.15s linear;
+      }
+      .bt-pct {
+        color: var(--bt-amber);
+        font-weight: 400;
+      }
+
+      /* ============ floating window (the screenshots' centrepiece) ============ */
+      #bt-popups {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+      .bt-dim {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        background: rgba(0, 0, 0, 0.25);
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      .bt-dim.show {
+        opacity: 1;
+      }
+      .bt-pop {
+        position: relative;
+        z-index: 2;
+        pointer-events: auto;
+        width: min(680px, 92vw);
+        background: var(--bt-win);
+        border: 1px solid var(--bt-amber-d);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.78), 0 0 50px rgba(232, 160, 32, 0.1),
+          inset 0 0 24px rgba(232, 160, 32, 0.02);
+        opacity: 0;
+        transform: scale(0.9) translateY(-6px);
+        transition: opacity 0.22s ease,
+          transform 0.22s cubic-bezier(0.2, 1.05, 0.4, 1);
+        overflow: hidden;
+      }
+      .bt-pop.show {
+        opacity: 1;
+        transform: none;
+      }
+      .bt-pop.bt-danger {
+        border-color: var(--bt-red);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.85), 0 0 60px rgba(224, 80, 48, 0.22),
+          inset 0 0 24px rgba(224, 80, 48, 0.03);
+      }
+      .bt-wp-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        background: linear-gradient(180deg, #1a1208, #0e0a06);
+        border-bottom: 1px solid var(--bt-amber-d);
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        color: var(--bt-amber);
+      }
+      .bt-pop.bt-danger .bt-wp-title {
+        background: linear-gradient(180deg, #2a0e08, #150805);
+        border-bottom-color: rgba(224, 80, 48, 0.6);
+        color: var(--bt-red-b);
+      }
+      .bt-wp-title .bt-wp-name {
+        flex: 1;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .bt-wp-title .bt-wp-btn {
+        width: 20px;
+        height: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        color: var(--bt-dim);
+        border: 1px solid transparent;
+      }
+      .bt-alert-strip {
+        height: 2px;
+        width: 100%;
+        background: repeating-linear-gradient(
+          90deg,
+          var(--bt-red) 0 10px,
+          transparent 10px 20px
+        );
+        animation: btAlertMove 1s linear infinite;
+      }
+      @keyframes btAlertMove {
+        from {
+          background-position: 0 0;
+        }
+        to {
+          background-position: 20px 0;
+        }
+      }
+      .bt-wp-body {
+        padding: 18px 22px;
+        font-size: 13px;
+        line-height: 1.65;
+        color: var(--bt-text);
+      }
+      .bt-meter {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 4px 0 10px;
+        font-variant-numeric: tabular-nums;
+      }
+      .bt-meter .big {
+        font-size: 34px;
+        color: var(--bt-amber-b);
+        text-shadow: 0 0 14px rgba(232, 160, 32, 0.5);
+      }
+      .bt-pop.bt-danger .bt-meter .big {
+        color: var(--bt-red-b);
+        text-shadow: 0 0 14px rgba(224, 80, 48, 0.6);
+      }
+      .bt-meter .unit {
+        font-size: 12px;
+        color: var(--bt-dim);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .bt-wp-row {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 8px 22px;
+        padding: 6px 0;
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+        border-bottom: 1px dotted rgba(232, 160, 32, 0.12);
+      }
+      .bt-wp-row:last-child {
+        border-bottom: none;
+      }
+      .bt-wp-row .k {
+        color: var(--bt-faint);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-size: 11px;
+      }
+      .bt-wp-row .v {
+        color: var(--bt-text);
+        text-align: right;
+      }
+      .bt-wp-row .v.ok {
+        color: var(--bt-green);
+      }
+      .bt-wp-row .v.warn {
+        color: var(--bt-amber-b);
+      }
+      .bt-wp-row .v.bad {
+        color: var(--bt-red);
+      }
+      .bt-wp-note {
+        margin-top: 14px;
+        padding: 10px 14px;
+        background: rgba(232, 160, 32, 0.06);
+        border-left: 3px solid var(--bt-amber);
+        color: var(--bt-amber-b);
+        font-size: 12px;
+        line-height: 1.65;
+      }
+      .bt-pop.bt-danger .bt-wp-note {
+        background: rgba(224, 80, 48, 0.08);
+        border-left-color: var(--bt-red);
+        color: #f0b090;
+      }
+      .bt-wp-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 14px;
+        background: linear-gradient(180deg, #0e0a06, #080604);
+        border-top: 1px solid var(--bt-amber-d);
+        font-size: 10.5px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--bt-faint);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .bt-hint {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 32px;
+        z-index: 3;
+        text-align: center;
+        font-size: 10px;
+        letter-spacing: 0.25em;
+        text-transform: uppercase;
+        color: var(--bt-dim);
+        opacity: 0;
+        transition: opacity 0.6s ease;
+        pointer-events: none;
+      }
+      .bt-hint.show {
+        opacity: 0.78;
+      }
+
+      /* ============ minimal variant ============
+         Deliberately NOT the CRT look: it reuses the app's own theme tokens
+         (--bg / --text / --accent / --font-display …) so it reads as the
+         product booting rather than a terminal. Shown only when the saved
+         bootMode is "simple". */
+      .bt-sim {
+        display: none;
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 22px;
+        background: var(--bg, #14171a);
+        color: var(--text, #e8e5de);
+        font-family: var(--font-body, -apple-system, "Segoe UI", sans-serif);
+      }
+      #boot[data-mode="simple"] .bt-sim {
+        display: flex;
+      }
+      #boot[data-mode="simple"] .bt-stage,
+      #boot[data-mode="simple"] #bt-desktop,
+      #boot[data-mode="simple"] #bt-popups,
+      #boot[data-mode="simple"] #boot-final,
+      #boot[data-mode="simple"]::before,
+      #boot[data-mode="simple"]::after {
+        display: none;
+      }
+      .bt-sim-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .bt-sim-mark {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        background: var(--accent-soft, rgba(232, 176, 75, 0.12));
+        color: var(--accent, #e8b04b);
+        border: 1px solid rgba(232, 176, 75, 0.25);
+        border-radius: 11px;
+        font-size: 18px;
+      }
+      .bt-sim-name {
+        font-family: var(--font-display, Georgia, serif);
+        font-weight: 600;
+        font-size: 20px;
+        letter-spacing: -0.01em;
+        line-height: 1.1;
+      }
+      .bt-sim-sub {
+        font-size: 11px;
+        color: var(--text-faint, #5c636e);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .bt-sim-bar {
+        width: min(320px, 70vw);
+        height: 3px;
+        border-radius: 2px;
+        background: var(--panel-3, #252b33);
+        overflow: hidden;
+      }
+      .bt-sim-fill {
+        width: 0;
+        height: 100%;
+        border-radius: 2px;
+        background: var(--accent, #e8b04b);
+        transition: width 0.25s ease;
+      }
+      .bt-sim-row {
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        width: min(320px, 70vw);
+        font-size: 12px;
+        color: var(--text-dim, #8b919b);
+      }
+      .bt-sim-pct {
+        margin-left: auto;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-faint, #5c636e);
+      }
+      /* The skip hint is shared, but the CRT treatment doesn't fit here. */
+      #boot[data-mode="simple"] .bt-hint {
+        color: var(--text-faint, #5c636e);
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        text-transform: none;
+      }
+      /* Climax: the reference's #final banner — clip-path opens from the centre
+         while two glowing edges sweep outwards. */
+      #boot-final {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        z-index: 4;
+        transform: translate(-50%, -50%);
+        padding: 26px 56px;
+        background: #0a0805;
+        border-top: 1px solid var(--bt-amber);
+        border-bottom: 1px solid var(--bt-amber);
+        box-shadow: 0 0 80px rgba(232, 160, 32, 0.55), 0 0 180px rgba(232, 160, 32, 0.22),
+          inset 0 0 80px rgba(232, 160, 32, 0.08);
+        color: var(--bt-amber-b);
+        font-size: clamp(20px, 2.6vw, 34px);
+        letter-spacing: 0.26em;
+        text-align: center;
+        text-shadow: 0 0 14px rgba(232, 160, 32, 0.95),
+          0 0 40px rgba(232, 160, 32, 0.6);
+        white-space: nowrap;
+        font-weight: 500;
+        clip-path: inset(0 50% 0 50%);
+        opacity: 0;
+        transition: clip-path 0.48s cubic-bezier(0.7, 0, 0.2, 1),
+          opacity 0.2s ease;
+      }
+      #boot-final.show {
+        opacity: 1;
+        clip-path: inset(0 0 0 0);
+      }
+      #boot-final::before,
+      #boot-final::after {
+        content: "";
+        position: absolute;
+        top: -2px;
+        bottom: -2px;
+        width: 2px;
+        background: var(--bt-amber-b);
+        box-shadow: 0 0 20px 4px rgba(232, 160, 32, 0.9);
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot-final::before {
+        left: 50%;
+      }
+      #boot-final::after {
+        right: 50%;
+      }
+      #boot-final.show::before {
+        animation: btEdgeLeft 0.48s cubic-bezier(0.7, 0, 0.2, 1) forwards;
+      }
+      #boot-final.show::after {
+        animation: btEdgeRight 0.48s cubic-bezier(0.7, 0, 0.2, 1) forwards;
+      }
+      @keyframes btEdgeLeft {
+        0% {
+          left: 50%;
+          opacity: 1;
+        }
+        90% {
+          left: 0;
+          opacity: 1;
+        }
+        100% {
+          left: 0;
+          opacity: 0;
+        }
+      }
+      @keyframes btEdgeRight {
+        0% {
+          right: 50%;
+          opacity: 1;
+        }
+        90% {
+          right: 0;
+          opacity: 1;
+        }
+        100% {
+          right: 0;
+          opacity: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot" aria-hidden="true">
+      <!-- ---------- phase 1: mark ---------- -->
+      <div class="bt-stage" id="bt-stage">
+        <!-- Real vector shapes so boot.ts can wipe them in one by one (sorted
+             by x): envelope outline, black flap notch, ten letters, red accent. -->
+        <svg viewBox="0 0 840 260" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <!-- The reference's "despike": blur then a steep alpha threshold, so
+                 the mark keeps a hard, faintly phosphor-bloomed edge. -->
+            <filter id="bt-despike" x="-12%" y="-12%" width="124%" height="124%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="1.8" result="b" />
+              <feComponentTransfer in="b">
+                <feFuncA type="linear" slope="4.5" intercept="-1.8" />
+              </feComponentTransfer>
+            </filter>
+          </defs>
+          <g id="bt-logo" transform="translate(3.5 9)">
+            <g filter="url(#bt-despike)">
+              <path
+                class="bt-ghost"
+                d="M42 80 H188 A8 8 0 0 1 196 88 V154 A8 8 0 0 1 188 162 H42 A8 8 0 0 1 34 154 V88 A8 8 0 0 1 42 80 Z"
+              />
+              <path class="bt-notch" d="M44 90 L115 138 L186 90" />
+            </g>
+            <g id="bt-word">
+              <text class="bt-ghost" x="232" y="152" font-size="88" font-weight="700">M</text>
+              <text class="bt-ghost" x="284.8" y="152" font-size="88" font-weight="700">A</text>
+              <text class="bt-ghost" x="337.6" y="152" font-size="88" font-weight="700">I</text>
+              <text class="bt-ghost" x="390.4" y="152" font-size="88" font-weight="700">L</text>
+              <text class="bt-ghost" x="443.2" y="152" font-size="88" font-weight="700">I</text>
+              <text class="bt-ghost" x="496" y="152" font-size="88" font-weight="700">G</text>
+              <text class="bt-ghost" x="548.8" y="152" font-size="88" font-weight="700">E</text>
+              <text class="bt-ghost" x="601.6" y="152" font-size="88" font-weight="700">N</text>
+              <text class="bt-ghost" x="654.4" y="152" font-size="88" font-weight="700">C</text>
+              <text class="bt-ghost" x="707.2" y="152" font-size="88" font-weight="700">E</text>
+            </g>
+            <circle class="bt-accent" cx="776" cy="88" r="10" />
+            <rect class="bt-accent" x="790" y="104" width="9" height="48" rx="2" />
+          </g>
+        </svg>
+        <div class="bt-caption" id="bt-caption">
+          MAIL AGGREGATION · BOOTING<span class="bt-cursor"></span>
+        </div>
+      </div>
+
+      <!-- ---------- phase 2: CRT desktop ---------- -->
+      <div id="bt-desktop">
+        <div class="bt-hud" id="bt-hud-top">
+          <span class="bt-brand">◢ MAILIGENCE</span>
+          <span class="bt-sep">│</span>
+          <span class="bt-item">MODE <b>SYNC</b></span>
+          <span class="bt-item">PLATFORM <b id="bt-h-platform">————</b></span>
+          <span class="bt-item">SESSION <b id="bt-h-session">————</b></span>
+          <span class="bt-spacer"></span>
+          <span class="bt-item">TIME <b id="bt-h-time">00:00:00</b></span>
+          <span class="bt-sep">│</span>
+          <span class="bt-item bt-live">● REC</span>
+        </div>
+
+        <div class="bt-work">
+          <section class="bt-w bt-tele" style="animation-delay: 0ms">
+            <div class="bt-w-head"><span class="bt-led"></span>IMAP / 邮件采集</div>
+            <div class="bt-w-body" id="bt-tele">
+              <div class="bt-sect">采集 / Fetch</div>
+              <div class="bt-dt"><span class="k">账户</span><span class="v" id="bt-v-accounts">—</span></div>
+              <div class="bt-dt"><span class="k">文件夹</span><span class="v" id="bt-v-folders">—</span></div>
+              <div class="bt-dt"><span class="k">协议</span><span class="v">TLS 1.3 · SASL</span></div>
+              <div class="bt-dt"><span class="k">轮询</span><span class="v">15 s</span></div>
+              <div class="bt-dt"><span class="k">空闲推送</span><span class="v warn" id="bt-v-idle">IDLE</span></div>
+              <div class="bt-sect">分析 / Analyze</div>
+              <div class="bt-dt"><span class="k">推理模式</span><span class="v" id="bt-v-mode">—</span></div>
+              <div class="bt-dt"><span class="k">并发</span><span class="v">6</span></div>
+              <div class="bt-dt"><span class="k">去重</span><span class="v">OFF · AI</span></div>
+              <div class="bt-dt"><span class="k">反馈记忆</span><span class="v ok">ON</span></div>
+              <div class="bt-sect">指标 / Metrics</div>
+              <div class="bt-dt"><span class="k">今日邮件</span><span class="v" id="bt-v-today">—</span></div>
+              <div class="bt-dt"><span class="k">未读</span><span class="v" id="bt-v-unread">—</span></div>
+              <div class="bt-dt"><span class="k">待处理</span><span class="v warn" id="bt-v-pending">—</span></div>
+              <div class="bt-dt"><span class="k">紧急</span><span class="v bad" id="bt-v-urgent">—</span></div>
+              <div class="bt-sect">状态 / Status</div>
+              <div class="bt-dt"><span class="k">数据库</span><span class="v">POSTGRESQL</span></div>
+              <div class="bt-dt"><span class="k">后端</span><span class="v" id="bt-v-api">—</span></div>
+              <div class="bt-dt"><span class="k">日程分析</span><span class="v" id="bt-v-sched">—</span></div>
+            </div>
+          </section>
+
+          <section class="bt-w bt-main" style="animation-delay: 70ms">
+            <div class="bt-w-head"><span class="bt-led bt-led-red"></span>MAILIGENCE CORE TERMINAL</div>
+            <div class="bt-w-body" id="bt-term"></div>
+          </section>
+
+          <section class="bt-w bt-code" style="animation-delay: 140ms">
+            <div class="bt-w-head"><span class="bt-led"></span>PIPELINE / 分析流</div>
+            <div class="bt-w-body" id="bt-code"></div>
+          </section>
+
+          <section class="bt-w bt-node" style="animation-delay: 210ms">
+            <div class="bt-w-head"><span class="bt-led bt-led-red"></span>MAILBOX MATRIX</div>
+            <div class="bt-w-body"><div id="bt-nodes"></div></div>
+          </section>
+        </div>
+
+        <div class="bt-hud bt-hud-bot">
+          <span class="bt-item">STAGE <b id="bt-stage-name">BOOT</b></span>
+          <span class="bt-item">NODE <b id="bt-node-count">00 / 48</b></span>
+          <span class="bt-spacer"></span>
+          <span class="bt-item">PIPELINE</span>
+          <div class="bt-prog"><div class="bt-fill" id="bt-fill"></div></div>
+          <span class="bt-pct" id="bt-pct">0%</span>
+          <span class="bt-spacer"></span>
+          <span class="bt-item">NET <b id="bt-v-net">OFFLINE</b></span>
+          <span class="bt-item">CH <b>07</b></span>
+          <span class="bt-item">FPS <b id="bt-fps">60</b></span>
+        </div>
+      </div>
+
+      <div id="bt-popups"></div>
+      <div class="bt-hint" id="bt-hint">按 Esc 或点击任意位置跳过</div>
+      <div id="boot-final">SYSTEM READY</div>
+
+      <!-- ---------- minimal variant: the app's own theme, no CRT chrome ---------- -->
+      <div class="bt-sim" id="bt-simple">
+        <div class="bt-sim-brand">
+          <span class="bt-sim-mark">✉</span>
+          <div>
+            <div class="bt-sim-name">Mailigence</div>
+            <div class="bt-sim-sub" id="bt-sim-sub">邮件聚合分析</div>
+          </div>
+        </div>
+        <div class="bt-sim-bar">
+          <div class="bt-sim-fill" id="bt-sim-fill"></div>
+        </div>
+        <div class="bt-sim-row">
+          <span id="bt-sim-step">正在启动…</span>
+          <span class="bt-sim-pct" id="bt-sim-pct">0%</span>
+        </div>
+      </div>
+    </div>
+    <script>
+      // Pick the saved boot variant before the first paint, so switching modes
+      // never flashes the wrong overlay. "off" drops the overlay outright —
+      // src/boot.ts then finds no #boot and every bootStep / bootStats /
+      // bootReady call degrades to a no-op on its own.
+      (function () {
+        var mode = "full";
+        try {
+          mode =
+            JSON.parse(localStorage.getItem("emailui-settings") || "{}")
+              .bootMode || "full";
+        } catch (e) {
+          /* fall through to "full" */
+        }
+        var b = document.getElementById("boot");
+        if (!b) return;
+        if (mode === "off") {
+          b.parentNode.removeChild(b);
+          return;
+        }
+        b.setAttribute("data-mode", mode);
+      })();
+
+      // Safety net: if the bundle never evaluates (network/JS failure),
+      // never leave the user behind a black screen.
+      window.setTimeout(function () {
+        var b = document.getElementById("boot");
+        if (!b) return;
+        b.classList.add("boot-out");
+        window.setTimeout(function () {
+          if (b.parentNode) b.parentNode.removeChild(b);
+        }, 700);
+      }, 30000);
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

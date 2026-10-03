@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
+import { bootStats, bootStep } from "./boot";
 import { AddAccountModal } from "./components/AddAccountModal";
 import { AccountList } from "./components/AccountList";
 import { AdManagementView } from "./components/AdManagementView";
@@ -36,9 +37,20 @@ export default function App() {
 
   const refreshAccounts = useCallback(async () => {
     setLoadingAccounts(true);
+    const done = bootStep("accounts");
     try {
-      setAccounts(await api.listAccounts());
+      const list = await api.listAccounts();
+      setAccounts(list);
+      done("ok", `${list.length}`);
+      bootStats({
+        accounts: String(list.length),
+        platform:
+          Array.from(
+            new Set(list.map((a) => PLATFORM_LABEL[a.platform] ?? a.platform)),
+          ).join(" / ") || "—",
+      });
     } catch {
+      done("fail");
       /* surfaced in mailbox error state */
     } finally {
       setLoadingAccounts(false);
@@ -47,13 +59,18 @@ export default function App() {
 
   useEffect(() => {
     refreshAccounts();
-    api.health().then((h) =>
-      setHealth({
-        encryption_configured: h.encryption_configured,
-        oauth_google_configured: h.oauth_google_configured,
-        oauth_microsoft_configured: h.oauth_microsoft_configured,
-      }),
-    );
+    const done = bootStep("server");
+    api
+      .health()
+      .then((h) => {
+        setHealth({
+          encryption_configured: h.encryption_configured,
+          oauth_google_configured: h.oauth_google_configured,
+          oauth_microsoft_configured: h.oauth_microsoft_configured,
+        });
+        done("ok");
+      })
+      .catch(() => done("fail"));
   }, [refreshAccounts]);
 
   // Surface the OAuth callback result (success / duplicate / error) that the

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { bootReady, bootStats, bootStep } from "../boot";
 import { ChatPanel } from "./ChatPanel";
 import { EmailDetailPanel } from "./EmailDetailPanel";
 import { useI18n } from "../i18n";
@@ -89,13 +90,22 @@ export function DashboardView() {
 
   // Fetch the AI advisor board (brief + schedule merged).
   const fetchSchedule = useCallback(async () => {
-    const sc = await api.getDashboardSchedule(scheduleFp.current ?? undefined);
-    scheduleFp.current = sc.fingerprint ?? scheduleFp.current;
-    if (!sc.unchanged) setSchedule(sc);
+    const done = bootStep("schedule");
+    try {
+      const sc = await api.getDashboardSchedule(scheduleFp.current ?? undefined);
+      scheduleFp.current = sc.fingerprint ?? scheduleFp.current;
+      if (!sc.unchanged) setSchedule(sc);
+      done("ok", sc.unchanged ? "cached" : "ai");
+    } catch (e) {
+      done("fail");
+      throw e;
+    }
   }, []);
 
   const fullRefresh = useCallback(async () => {
     setRefreshing(true);
+    const okSummary = bootStep("summary");
+    const okPending = bootStep("pending");
     try {
       const [s, p] = await Promise.all([
         api.getDashboardSummary(),
@@ -105,12 +115,23 @@ export function DashboardView() {
       prevSummaryRef.current = s;
       setPending(p);
       setLastUpdated(new Date());
+      bootStats({
+        today: String(s.today_count),
+        unread: String(s.unread_count),
+        pending: String(s.pending_count),
+        urgent: String(s.urgent_count),
+      });
+      okSummary("ok", `待处理 ${s.pending_count}`);
+      okPending("ok", `${p.length} 封`);
       await fetchSchedule();
     } catch {
       /* ignore */
+      okSummary("fail");
+      okPending("fail");
     } finally {
       setRefreshing(false);
       setLoading(false);
+      bootReady();
     }
   }, [fetchSchedule]);
 
@@ -155,9 +176,10 @@ export function DashboardView() {
     fullRefresh();
     api
       .getAiSettings()
-      .then((s) =>
-        setAiAvailable(s.api_key_configured && s.analysis_mode !== "rules_only"),
-      )
+      .then((s) => {
+        setAiAvailable(s.api_key_configured && s.analysis_mode !== "rules_only");
+        bootStats({ mode: s.analysis_mode });
+      })
       .catch(() => setAiAvailable(false));
   }, [fullRefresh]);
 

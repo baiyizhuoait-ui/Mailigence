@@ -4,6 +4,7 @@ import {
   ACCENT_PRESETS,
   useI18n,
   type AccentColor,
+  type BootMode,
   type Lang,
   type ThemeMode,
 } from "../i18n";
@@ -41,6 +42,8 @@ const PROVIDER_TYPE_KEYS: Record<ProviderType, string> = {
   rules_only: "settings.profileType.rules_only",
 };
 
+const BOOT_MODES: BootMode[] = ["off", "simple", "full"];
+
 const MODE_KEYS: { mode: AnalysisMode; labelKey: string; descKey: string }[] = [
   { mode: "auto", labelKey: "settings.ai.mode.auto", descKey: "settings.ai.mode.autoDesc" },
   { mode: "ai_only", labelKey: "settings.ai.mode.ai_only", descKey: "settings.ai.mode.ai_onlyDesc" },
@@ -48,8 +51,19 @@ const MODE_KEYS: { mode: AnalysisMode; labelKey: string; descKey: string }[] = [
 ];
 
 export function SettingsView() {
-  const { t, lang, theme, accent, customAccent, setLang, setTheme, setAccent, setCustomAccent } =
-    useI18n();
+  const {
+    t,
+    lang,
+    theme,
+    accent,
+    customAccent,
+    bootMode,
+    setLang,
+    setTheme,
+    setAccent,
+    setCustomAccent,
+    setBootMode,
+  } = useI18n();
 
   // ---- AI settings state ----
   const [mode, setMode] = useState<AnalysisMode>("auto");
@@ -934,6 +948,25 @@ export function SettingsView() {
                 </button>
               ),
             )}
+          </div>
+        </div>
+
+        {/* Boot animation */}
+        <div className="settings-row">
+          <span className="settings-label">{t("settings.boot")}</span>
+          <div>
+            <div className="seg-control">
+              {BOOT_MODES.map((m) => (
+                <button
+                  key={m}
+                  className={`seg-btn ${bootMode === m ? "active" : ""}`}
+                  onClick={() => setBootMode(m)}
+                >
+                  {t(`settings.boot.${m}`)}
+                </button>
+              ))}
+            </div>
+            <div className="settings-hint">{t("settings.boot.hint")}</div>
           </div>
         </div>
       </section>

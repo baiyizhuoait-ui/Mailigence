@@ -137,6 +137,26 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
     );
   }
 
+  // Row-level read/unread toggle. Optimistic update; when the unread-only
+  // filter is active a mail that just became read drops out of the list.
+  async function toggleRead(m: UnifiedEmail) {
+    const next = !m.is_read;
+    setEmails((prev) =>
+      prev.map((e) => (e.id === m.id ? { ...e, is_read: next } : e)),
+    );
+    try {
+      await api.markEmailRead(m.id, next);
+      if (unreadOnly && next) {
+        setEmails((prev) => prev.filter((e) => e.id !== m.id));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setEmails((prev) =>
+        prev.map((el) => (el.id === m.id ? { ...el, is_read: m.is_read } : el)),
+      );
+    }
+  }
+
   // ---- selection helpers ----
   const allSelected = emails.length > 0 && emails.every((e) => selected.has(e.id));
   const someSelected = !allSelected && emails.some((e) => selected.has(e.id));
@@ -355,6 +375,17 @@ export function MailboxView({ accounts, onRefreshAccounts }: Props) {
                     )}
                   </div>
                 )}
+                <button
+                  className="email-row-read-toggle"
+                  title={m.is_read ? t("mailbox.markUnread") : t("mailbox.markRead")}
+                  aria-label={m.is_read ? t("mailbox.markUnread") : t("mailbox.markRead")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleRead(m);
+                  }}
+                >
+                  {m.is_read ? "✉" : "✓"}
+                </button>
               </li>
             ))}
           </ul>

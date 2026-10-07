@@ -270,14 +270,134 @@ async def generate_draft_replies(
     return [DraftReply(**item) for item in drafts]
 
 
-@router.patch("/{email_id}/read", response_model=EmailOut)
-async def mark_email_read(email_id: int, db: AsyncSession = Depends(get_db)) -> UnifiedEmail:
-    """Mark an email as read."""
+class SendReplyRequest(BaseModel):
+    content: str
+
+
+@router.post("/{email_id}/send-reply")
+async def send_reply(
+    email_id: int, payload: SendReplyRequest, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Send a reply to an email from inside the app (closes the AI-draft loop).
+
+    App-password accounts go out via SMTP (our own Message-ID + In-Reply-To
+    headers, plus a local SENT row so reply tracking matches instantly);
+    Microsoft OAuth goes via Graph sendMail; Gmail OAuth is refused with a
+    hint (plain login with an OAuth-derived credential is rejected by Google's
+    SMTP endpoint). Either way the original mail is marked ``has_reply`` so it
+    drops out of the pending-replies queue immediately.
+    """
     email = await db.get(UnifiedEmail, email_id)
     if email is None:
         raise HTTPException(status_code=404, detail="Email not found")
-    if not email.is_read:
-        email.is_read = True
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="回复内容不能为空")
+
+    to_addr = (email.sender_email or "").strip()
+    if not to_addr:
+        raise HTTPException(status_code=400, detail="原邮件没有可回复的发件人地址")
+
+    account = await db.get(EmailAccount, email.account_id)
+    if account is None:
+        raise HTTPException(status_code=400, detail="找不到该邮件所属的邮箱账户")
+    if account.auth_type not in (AuthType.APP_PASSWORD, AuthType.OAUTH_MICROSOFT):
+        raise HTTPException(
+            status_code=400,
+            detail="Gmail OAuth 账户暂不支持应用内发送：请改用授权码方式添加账户，或到原邮箱发送。",
+        )
+
+    from app.services import smtp_sender
+    from app.services.mail_sync import resolve_credential
+
+    orig_subject = email.subject or "(无主题)"
+    subject = (
+        orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
+    )
+    subject = " ".join(subject.split())  # IMAP keeps folded subjects with \r\n
+
+    orig_mid = (email.message_id or "").strip().strip("<>")
+    raw = email.raw_headers if isinstance(email.raw_headers, dict) else {}
+    refs = (raw.get("References") or "").strip()
+    if orig_mid and f"<{orig_mid}>" not in refs:
+        refs = f"{refs} <{orig_mid}>" if refs else f"<{orig_mid}>"
+
+    try:
+        credential = await resolve_credential(account)
+        if account.auth_type == AuthType.OAUTH_MICROSOFT:
+            # Graph generates the Message-ID server-side, so we don't insert a
+            # local SENT row (it would duplicate the synced copy); the reply
+            # shows up on the next "sync sent" pass in the reply-tracking view.
+            await smtp_sender.send_via_graph(credential, to_addr, subject, content)
+            sent_id = None
+        else:
+            msg, mid = smtp_sender.build_reply_message(
+                account.email, to_addr, subject, content, orig_mid, refs
+            )
+            await smtp_sender.send_via_smtp(account, credential, msg)
+            sent_id = await _insert_sent_row(
+                db, account, email, subject, content, mid, refs, orig_mid
+            )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=smtp_sender.friendly_send_error(exc)
+        ) from exc
+
+    if not email.has_reply:
+        email.has_reply = True
+    await db.commit()
+    return {"ok": True, "sent_id": sent_id}
+
+
+async def _insert_sent_row(
+    db: AsyncSession,
+    account: EmailAccount,
+    email: UnifiedEmail,
+    subject: str,
+    content: str,
+    mid: str,
+    refs: str,
+    orig_mid: str,
+) -> int:
+    """Persist the outgoing reply as a SENT UnifiedEmail row.
+
+    Carries the same Message-ID we put on the wire so the IMAP sent-folder
+    sync later dedupes it against the server's copy; ``In-Reply-To`` lets
+    reply tracking thread it under the original mail.
+    """
+    sent = UnifiedEmail(
+        account_id=account.id,
+        platform=account.platform,
+        message_id=mid,
+        thread_id=email.thread_id or "",
+        direction=MailDirection.SENT,
+        sender=account.display_name or account.email,
+        sender_email=account.email,
+        recipients=[email.sender_email],
+        subject=subject,
+        body_snippet=content[:500],
+        received_at=datetime.now(timezone.utc),
+        is_read=True,
+        raw_headers={"Message-ID": mid, "In-Reply-To": orig_mid, "References": refs},
+    )
+    db.add(sent)
+    await db.commit()
+    await db.refresh(sent)
+    return sent.id
+
+
+@router.patch("/{email_id}/read", response_model=EmailOut)
+async def mark_email_read(
+    email_id: int,
+    read: bool = True,
+    db: AsyncSession = Depends(get_db),
+) -> UnifiedEmail:
+    """Set the read state (``?read=false`` marks the mail unread)."""
+    email = await db.get(UnifiedEmail, email_id)
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    if email.is_read != read:
+        email.is_read = read
         await db.commit()
         await db.refresh(email)
     return email

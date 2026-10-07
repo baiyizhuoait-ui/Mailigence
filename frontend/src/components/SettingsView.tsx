@@ -12,6 +12,7 @@ import type {
   AiMemory,
   AiSettings,
   AnalysisMode,
+  CapabilityProbeResult,
   EmailAccount,
   EmailCategory,
   ProbeContextResult,
@@ -94,6 +95,10 @@ export function SettingsView() {
   const [testBusy, setTestBusy] = useState<number | null>(null);
   const [testMsg, setTestMsg] = useState<{ id: number; ok: boolean; text: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<number | null>(null);
+  // Capability probe: deterministic test suite per profile.
+  const [capBusy, setCapBusy] = useState<number | null>(null);
+  const [capResult, setCapResult] = useState<{ id: number; r: CapabilityProbeResult } | null>(null);
+  const [capErr, setCapErr] = useState<string | null>(null);
   // Last-used base_url/model per provider_type — auto-fill when switching type.
   const lastByType = useRef<Partial<Record<ProviderType, { baseUrl: string; model: string }>>>({});
 
@@ -447,6 +452,21 @@ export function SettingsView() {
     }
   }
 
+  async function probeCapability(p: ProviderProfile) {
+    setCapBusy(p.id);
+    setCapResult(null);
+    setCapErr(null);
+    try {
+      const r = await api.probeProfileCapability(p.id);
+      setCapResult({ id: p.id, r });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.replace(/^\d{3}:\s*/, "") : String(e);
+      setCapErr(msg || t("settings.profile.capFail"));
+    } finally {
+      setCapBusy(null);
+    }
+  }
+
   async function probeFormModels() {
     const base = formBaseUrl.trim();
     if (!base) {
@@ -661,9 +681,17 @@ export function SettingsView() {
                     <button
                       className="btn small ghost"
                       onClick={() => testProfile(p)}
-                      disabled={testBusy !== null}
+                      disabled={testBusy !== null || capBusy !== null}
                     >
                       {testBusy === p.id ? "…" : t("settings.profile.test")}
+                    </button>
+                    <button
+                      className="btn small ghost"
+                      onClick={() => probeCapability(p)}
+                      disabled={capBusy !== null || p.provider_type === "rules_only"}
+                      title={t("settings.profile.capTitle")}
+                    >
+                      {capBusy === p.id ? t("settings.profile.capTesting") : t("settings.profile.cap")}
                     </button>
                     <button className="btn small ghost" onClick={() => openEditForm(p)}>
                       {t("settings.profile.edit")}
@@ -678,6 +706,33 @@ export function SettingsView() {
                   </div>
                   {testMsg?.id === p.id && (
                     <span className={`sync-result ${testMsg.ok ? "" : "error"}`}>{testMsg.text}</span>
+                  )}
+                  {capErr && <span className="sync-result error">{capErr}</span>}
+                  {capResult?.id === p.id && (
+                    <div className="cap-result">
+                      <div className="cap-result-head">
+                        <span className={`cap-badge cap-${capResult.r.level}`}>
+                          {t(`settings.profile.capLevel.${capResult.r.level}`)}
+                        </span>
+                        <span className="cap-score">
+                          {capResult.r.passed}/{capResult.r.total}
+                        </span>
+                        <span className="cap-total mono">
+                          {(capResult.r.total_ms / 1000).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="cap-message">{capResult.r.message}</div>
+                      <ul className="cap-items">
+                        {capResult.r.items.map((it) => (
+                          <li key={it.key} className={it.passed ? "pass" : "fail"}>
+                            <span className="cap-mark">{it.passed ? "✓" : "✗"}</span>
+                            <span className="cap-title">{it.title}</span>
+                            <span className="cap-detail" title={it.detail}>{it.detail}</span>
+                            <span className="cap-ms mono">{(it.latency_ms / 1000).toFixed(1)}s</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
               ))}

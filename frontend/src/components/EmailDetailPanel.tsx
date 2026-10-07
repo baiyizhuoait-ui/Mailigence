@@ -63,6 +63,8 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   const [drafts, setDrafts] = useState<DraftReply[] | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftEdits, setDraftEdits] = useState<string[]>([]);
+  // Index of the draft currently being sent (null = no send in flight).
+  const [sendingIdx, setSendingIdx] = useState<number | null>(null);
 
   const catLabel = (name: string) =>
     categories.find((c) => c.name === name)?.label ?? name;
@@ -194,6 +196,26 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
       showToast("success", t("draft.copied"));
     } catch {
       showToast("error", t("draft.copyFailed"));
+    }
+  }
+
+  // Send the edited draft straight from the app (SMTP / Graph backend side).
+  // Confirmation guards against accidental sends; the toast surfaces the
+  // backend's friendly error (auth hint / connectivity) on failure.
+  async function handleSendDraft(i: number) {
+    if (!email || sendingIdx !== null) return;
+    const content = (draftEdits[i] ?? "").trim();
+    if (!content) return;
+    if (!window.confirm(t("draft.confirmSend"))) return;
+    setSendingIdx(i);
+    try {
+      await api.sendReply(email.id, content);
+      showToast("success", t("draft.sent"));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast("error", `${t("draft.sendFailed")}${msg.replace(/^\d{3}:\s*/, "")}`);
+    } finally {
+      setSendingIdx(null);
     }
   }
 
@@ -457,6 +479,13 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                               }}
                             />
                             <div className="draft-actions">
+                              <button
+                                className="btn small primary"
+                                disabled={sendingIdx !== null}
+                                onClick={() => handleSendDraft(i)}
+                              >
+                                {sendingIdx === i ? t("draft.sending") : t("draft.send")}
+                              </button>
                               <button
                                 className="btn small ghost"
                                 onClick={() => copyBody(draftEdits[i] ?? "")}

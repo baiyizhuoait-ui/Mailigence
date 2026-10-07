@@ -17,12 +17,19 @@ Run on any platform (works identically on macOS/Linux):
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 
 
 def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    # Surface app.* INFO logs (chat_qa stage timings, planner output, ...).
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
 
     from app.config import settings
     from app.main import app

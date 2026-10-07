@@ -712,6 +712,179 @@ async def _anthropic_chat(
     return "".join(block.get("text", "") for block in data.get("content", []))
 
 
+# --- streaming chat (SSE for the chat QA panel) ------------------------------
+#
+# Streaming counterparts of the non-streaming calls above. They yield visible
+# answer text as it is generated; reasoning deltas (GLM's ``reasoning_content``
+# or Ollama thinking output) are skipped so only the user-facing answer
+# streams.
+
+
+async def stream_chat_answer(
+    cfg: AiConfig,
+    user_content: str,
+    system_prompt: str,
+    max_tokens: int = 2048,
+    timeout: float = 120,
+):
+    """Dispatch one streaming answer-generation call to the configured provider."""
+    if _is_ollama(cfg.base_url):
+        async for piece in _ollama_chat_stream(
+            cfg, user_content, system_prompt, max_tokens=max_tokens, timeout=timeout
+        ):
+            yield piece
+        return
+    if cfg.provider == "anthropic":
+        async for piece in _anthropic_chat_stream(
+            cfg, user_content, system_prompt, max_tokens=max_tokens, timeout=timeout
+        ):
+            yield piece
+        return
+    async for piece in _openai_chat_stream(
+        cfg, user_content, system_prompt, max_tokens=max_tokens, timeout=timeout
+    ):
+        yield piece
+
+
+async def _openai_chat_stream(
+    cfg: AiConfig,
+    user_content: str,
+    system_prompt: str,
+    max_tokens: int = 2048,
+    timeout: float = 120,
+):
+    """OpenAI-compatible ``stream=True`` SSE deltas (GLM / DeepSeek / Kimi ...)."""
+    headers = {
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": cfg.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    url = cfg.base_url.rstrip("/") + "/chat/completions"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", url, headers=headers, json=body) as resp:
+            if resp.status_code != 200:
+                text = (await resp.aread()).decode("utf-8", "replace")
+                raise RuntimeError(
+                    f"LLM HTTP {resp.status_code}: {text[:200]}{_llm_error_hint(text)}"
+                )
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                choice = (obj.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+                # GLM thinking models emit reasoning under ``reasoning_content``
+                # and the answer under ``content`` — stream only the answer.
+                piece = delta.get("content")
+                if piece:
+                    yield piece
+
+
+async def _ollama_chat_stream(
+    cfg: AiConfig,
+    user_content: str,
+    system_prompt: str,
+    max_tokens: int = 2048,
+    timeout: float = 120,
+):
+    """Native Ollama /api/chat streaming (ndjson), thinking disabled."""
+    body: dict = {
+        "model": cfg.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "stream": True,
+        "think": False,
+        "options": {"temperature": 0, "num_predict": max_tokens},
+    }
+    num_ctx = cfg.resolved_num_ctx or (
+        settings.ai_num_ctx if settings.ai_num_ctx > 0 else None
+    )
+    if num_ctx and num_ctx > 0:
+        body["options"]["num_ctx"] = num_ctx
+    base = cfg.base_url.rstrip("/")
+    url = base.removesuffix("/v1") + "/api/chat"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", url, json=body) as resp:
+            if resp.status_code != 200:
+                text = (await resp.aread()).decode("utf-8", "replace")
+                raise RuntimeError(f"LLM HTTP {resp.status_code}: {text[:200]}")
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("done"):
+                    break
+                piece = (obj.get("message") or {}).get("content")
+                if piece:
+                    yield piece
+
+
+async def _anthropic_chat_stream(
+    cfg: AiConfig,
+    user_content: str,
+    system_prompt: str,
+    max_tokens: int = 2048,
+    timeout: float = 120,
+):
+    """Anthropic Messages API streaming SSE."""
+    headers = {
+        "x-api-key": cfg.api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": cfg.model,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+        "messages": [{"role": "user", "content": user_content}],
+        "system": system_prompt,
+        "stream": True,
+    }
+    url = cfg.base_url.rstrip("/") + "/messages"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", url, headers=headers, json=body) as resp:
+            if resp.status_code != 200:
+                text = (await resp.aread()).decode("utf-8", "replace")
+                raise RuntimeError(f"Anthropic HTTP {resp.status_code}: {text[:200]}")
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    obj = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+                etype = obj.get("type")
+                if etype == "content_block_delta":
+                    piece = (obj.get("delta") or {}).get("text")
+                    if piece:
+                        yield piece
+                elif etype == "message_stop":
+                    break
+
+
 # --- rule-based fallback ----------------------------------------------------
 
 # Ordered keyword → category mapping. First match wins, so specific categories

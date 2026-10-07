@@ -350,6 +350,26 @@ export interface ProbeContextResult {
   source: string;
 }
 
+// ---------------- capability probe ----------------
+
+export interface CapabilityItem {
+  key: string;
+  title: string;
+  passed: boolean;
+  detail: string;
+  latency_ms: number;
+}
+
+export interface CapabilityProbeResult {
+  model: string;
+  items: CapabilityItem[];
+  passed: number;
+  total: number;
+  level: "good" | "ok" | "poor";
+  message: string;
+  total_ms: number;
+}
+
 // ---------------- AI memory ----------------
 
 export interface AiMemory {
@@ -369,6 +389,12 @@ export interface CitedEmail {
   subject: string;
   sender: string;
   date: string | null;
+  /** Distinguishing info for the chat reference cards. */
+  sender_email?: string;
+  category?: string | null;
+  unread?: boolean;
+  action?: string | null;
+  preview?: string;
 }
 
 export interface ChatResponse {

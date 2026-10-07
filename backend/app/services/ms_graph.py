@@ -154,6 +154,35 @@ async def fetch_message_body(
     raise RuntimeError("Message not found in mailbox")
 
 
+async def send_mail(access_token: str, to_addr: str, subject: str, body_text: str) -> None:
+    """Send a plain-text mail via ``POST /me/sendMail`` (saved to Sent Items).
+
+    Graph assigns the Message-ID server-side, so callers must not rely on a
+    locally-generated one for dedupe — reply tracking picks the message up on
+    the next sent-folder sync instead.
+    """
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": body_text},
+            "toRecipients": [{"emailAddress": {"address": to_addr}}],
+        },
+        "saveToSentItems": True,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{GRAPH_ENDPOINT}/me/sendMail",
+            json=payload,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if resp.status_code == 401:
+        raise RuntimeError(
+            "Microsoft access token is invalid or expired — re-authorize the account"
+        )
+    if resp.status_code != 202:
+        raise RuntimeError(f"Microsoft Graph HTTP {resp.status_code}: {resp.text[:300]}")
+
+
 # --- normalisation -----------------------------------------------------------
 
 def _extract_headers(header_list: list[dict]) -> dict:

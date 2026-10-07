@@ -6,10 +6,12 @@ import type {
   BatchAdAction,
   BatchAdActionResult,
   BlockedSender,
+  CapabilityProbeResult,
   CategoryCreateInput,
   CategoryUpdateInput,
   ChatMessage,
   ChatResponse,
+  CitedEmail,
   DashboardSummary,
   DraftReply,
   EmailAccount,
@@ -155,6 +157,14 @@ export const api = {
   generateDraftReplies: (id: number) =>
     request<DraftReply[]>(`/emails/${id}/draft-replies`, { method: "POST" }),
 
+  // Send a reply to an email from inside the app (SMTP / Graph depending on
+  // the account). Closes the AI-draft loop: generate → edit → send.
+  sendReply: (id: number, content: string) =>
+    request<{ ok: boolean; sent_id: number | null }>(`/emails/${id}/send-reply`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
+
   // ---------------- Full-text search ----------------
 
   search: (params: SearchParams) => {
@@ -190,8 +200,8 @@ export const api = {
   deleteCategory: (id: number) =>
     request<{ deleted: number }>(`/categories/${id}`, { method: "DELETE" }),
 
-  markEmailRead: (id: number) =>
-    request<UnifiedEmail>(`/emails/${id}/read`, { method: "PATCH" }),
+  markEmailRead: (id: number, read = true) =>
+    request<UnifiedEmail>(`/emails/${id}/read?read=${read}`, { method: "PATCH" }),
 
   // Correct the AI classification (P1 feedback loop); the backend records the
   // correction and re-queues this sender's other mails for re-analysis.
@@ -382,6 +392,12 @@ export const api = {
       { method: "POST" },
     ),
 
+  probeProfileCapability: (id: number) =>
+    request<CapabilityProbeResult>(
+      `/settings/provider-profiles/${id}/probe-capability`,
+      { method: "POST" },
+    ),
+
   // ---------------- AI memory ----------------
 
   listMemories: () => request<AiMemory[]>("/ai/memories"),
@@ -402,4 +418,56 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  // Streaming chat (SSE): text deltas arrive while the model is generating,
+  // then a final event with the full answer, cited cards and serving tier.
+  chatStream: async (
+    payload: { message: string; history: ChatMessage[] },
+    handlers: {
+      onDelta: (text: string) => void;
+      onDone: (final: {
+        done: boolean;
+        answer: string;
+        cited_emails: CitedEmail[];
+        source: string;
+        tier: "local" | "cloud";
+      }) => void;
+    },
+  ) => {
+    const resp = await fetch(BASE + "/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try {
+        const body = await resp.json();
+        detail = body.detail ?? JSON.stringify(body);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(`${resp.status}: ${detail}`);
+    }
+    const reader = resp.body?.getReader();
+    if (!reader) throw new Error("streaming not supported");
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // SSE events are separated by a blank line; keep the tail in buf.
+      const events = buf.split("\n\n");
+      buf = events.pop() ?? "";
+      for (const evt of events) {
+        const line = evt.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        const obj = JSON.parse(line.slice(6));
+        if (typeof obj.t === "string") handlers.onDelta(obj.t);
+        else if (obj.done) handlers.onDone(obj);
+        else if (obj.error) throw new Error(obj.error);
+      }
+    }
+  },
 };

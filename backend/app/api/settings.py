@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.ai_provider_profile import AIProviderProfile
-from app.services import ai_config, context_probe, crypto
+from app.services import ai_config, capability_probe, context_probe, crypto
 from app.services.ai_config import load_ai_config, save_global_ai_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -127,6 +127,24 @@ class ProbeContextOut(BaseModel):
     app_min_ctx: int
     ai_concurrency: int
     source: str = "probed"
+
+
+class CapabilityItem(BaseModel):
+    key: str
+    title: str
+    passed: bool
+    detail: str
+    latency_ms: int
+
+
+class CapabilityProbeOut(BaseModel):
+    model: str
+    items: list[CapabilityItem]
+    passed: int
+    total: int
+    level: str  # good | ok | poor
+    message: str
+    total_ms: int
 
 
 class ProbeIn(BaseModel):
@@ -354,6 +372,47 @@ async def probe_ad_hoc_models(payload: ProbeIn) -> ProviderModelsOut:
         raise HTTPException(status_code=400, detail="规则模式没有可探测的模型")
     models = await _probe_models(payload.provider_type, payload.base_url, payload.api_key)
     return ProviderModelsOut(models=models)
+
+
+@router.post("/provider-profiles/{profile_id}/probe-capability", response_model=CapabilityProbeOut)
+async def probe_profile_capability(
+    profile_id: int, db: AsyncSession = Depends(get_db)
+) -> CapabilityProbeOut:
+    """Run the deterministic capability suite against this profile's model.
+
+    Sends 6 small real prompts (JSON output / date extraction / triage /
+    conflict reasoning / anti-hallucination / instruction following) and
+    verifies every answer programmatically. Sequential on purpose to stay
+    inside provider rate limits; a thinking model can take a minute or two.
+    """
+    profile = await _get_profile(db, profile_id)
+    if profile.provider_type == "rules_only":
+        raise HTTPException(status_code=400, detail="规则模式没有可测试的模型")
+    model = profile.model.strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="请先填写模型名称再测试能力")
+    import time as _time
+
+    started = _time.perf_counter()
+    report = await capability_probe.probe_capabilities(
+        profile.provider_type, profile.base_url or "", model, _profile_key(profile)
+    )
+    total_ms = int((_time.perf_counter() - started) * 1000)
+    return CapabilityProbeOut(
+        model=report.model,
+        items=[
+            CapabilityItem(
+                key=i.key, title=i.title, passed=i.passed,
+                detail=i.detail, latency_ms=i.latency_ms,
+            )
+            for i in report.items
+        ],
+        passed=report.passed,
+        total=report.total,
+        level=report.level,
+        message=report.message,
+        total_ms=total_ms,
+    )
 
 
 @router.post("/provider-profiles/{profile_id}/test")

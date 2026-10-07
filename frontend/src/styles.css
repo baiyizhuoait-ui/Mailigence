@@ -663,6 +663,31 @@ button {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+/* Row-level read/unread toggle: hidden until the row is hovered. */
+.email-row-read-toggle {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text-faint, #9ca3af);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.email-row:hover .email-row-read-toggle,
+.email-row-read-toggle:focus-visible {
+  opacity: 1;
+}
+.email-row-read-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .email-row-check {
   flex-shrink: 0;
   display: flex;
@@ -2761,6 +2786,97 @@ button {
   gap: 6px;
 }
 
+/* Capability probe result panel (spans the full card width). */
+.cap-result {
+  flex-basis: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.cap-result-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cap-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 20px;
+}
+.cap-badge.cap-good {
+  color: var(--success);
+  border: 1px solid var(--success);
+  background: rgba(139, 177, 116, 0.12);
+}
+.cap-badge.cap-ok {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+}
+.cap-badge.cap-poor {
+  color: var(--error);
+  border: 1px solid var(--error);
+  background: var(--error-soft);
+}
+.cap-score {
+  font-weight: 600;
+  color: var(--text);
+}
+.cap-total {
+  margin-left: auto;
+  color: var(--text-faint);
+}
+.cap-message {
+  color: var(--text-dim);
+}
+.cap-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cap-items li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.cap-items li.pass .cap-mark {
+  color: var(--success);
+}
+.cap-items li.fail .cap-mark {
+  color: var(--error);
+}
+.cap-mark {
+  flex: none;
+  font-weight: 700;
+}
+.cap-title {
+  flex: none;
+  color: var(--text);
+  font-weight: 500;
+}
+.cap-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+.cap-ms {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
 .probe-candidate-row {
   display: flex;
   flex-wrap: wrap;
@@ -3991,6 +4107,28 @@ button {
   border: 1px solid var(--border, rgba(148, 163, 184, 0.25));
 }
 
+/* Local/cloud tier badge on assistant bubbles — makes the two serving tiers
+   visibly distinct (cloud = deep, local = instant). */
+.chat-tier-badge {
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.chat-tier-badge.tier-cloud {
+  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.12);
+  border-color: rgba(124, 58, 237, 0.35);
+}
+.chat-tier-badge.tier-local {
+  color: #059669;
+  background: rgba(5, 150, 105, 0.12);
+  border-color: rgba(5, 150, 105, 0.35);
+}
+
 .chat-input-row {
   display: flex;
   gap: 8px;
@@ -4016,32 +4154,129 @@ button {
   border-top: 1px dashed var(--border-soft);
   padding-top: 6px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
 }
 
 .chat-cited-label {
-  flex-basis: 100%;
   font-size: 11px;
   color: var(--text-faint);
 }
 
+/* Inline #id chips inside the answer text — every reference is clickable. */
+.chat-id-chip {
+  display: inline-block;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 2px 7px;
+  margin: 0 2px;
+  cursor: pointer;
+}
+
+.chat-id-chip:hover {
+  border-color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Rich reference card: everything needed to tell mails apart at a glance. */
 .cited-card {
-  font-size: 11.5px;
-  background: var(--hover, rgba(0, 0, 0, 0.02));
+  font-size: 12px;
+  background: var(--panel-2, rgba(0, 0, 0, 0.02));
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 4px 8px;
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 10px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
   text-align: left;
   color: var(--text);
 }
 
 .cited-card:hover {
-  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cited-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.cited-sender {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cited-unread {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+.cited-date {
+  margin-left: auto;
+  flex: none;
+}
+
+.cited-subject {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cited-preview {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cited-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.cited-chip {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--text);
+}
+
+.cited-chip.act-reply {
+  background: var(--error-soft, rgba(220, 38, 38, 0.1));
+  color: var(--error, #dc2626);
+  border-color: transparent;
+}
+
+.cited-id {
+  font-family: var(--mono, monospace);
+}
+
+.cited-open {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.cited-card:hover .cited-open {
+  text-decoration: underline;
 }
 
 /* ---------------- Full-text search ---------------- */

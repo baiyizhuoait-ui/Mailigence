@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # How many emails are analyzed in parallel during a batch (each email =
     # one LLM request). Cloud APIs scale nearly linearly; local Ollama/LM
     # Studio queue requests internally, so a moderate value is safe there too.
-    ai_concurrency: int = 6
+    ai_concurrency: int = 3
     # Reuse a prior result for identical sender+subject instead of calling the
     # LLM again (cost control). 0/false (default): AI mode always calls the AI.
     ai_dedup_cache: bool = False

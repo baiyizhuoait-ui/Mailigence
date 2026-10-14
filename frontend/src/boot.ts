@@ -28,7 +28,7 @@
 export type StepKey = "server" | "accounts" | "summary" | "pending" | "schedule";
 
 /** Cold start: minimum time up — the mark reveal plus a few seconds of desktop. */
-const MIN_MS = 7600;
+const MIN_MS = 4500;
 /**
  * Warm start: the app reports ready before the mark reveal is even due, so the
  * intro cuts straight to the desktop and hands over here instead of at MIN_MS.

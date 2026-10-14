@@ -27,6 +27,15 @@ export function ImportDialog({ accountId, accountLabel, onClose, onCompleted }: 
   const [checking, setChecking] = useState(true);
   const completedNotified = useRef(false);
 
+  // Escape closes the dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   function maxCustomDate() {
     return new Date().toISOString().split("T")[0];
   }

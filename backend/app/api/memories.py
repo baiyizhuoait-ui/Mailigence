@@ -33,16 +33,17 @@ class MemoryInput(BaseModel):
 
 
 async def _requeue_and_analyze(db: AsyncSession) -> int:
-    """Re-queue stored emails and kick off a background re-classification.
+    """Re-queue recent mail and kick off a background re-classification.
 
-    Returns the number of emails re-queued. The analysis manager runs in the
-    background (up to 50 mails per pass) so a large mailbox is re-classified
-    progressively without blocking the request; the periodic sweep in main.py
-    keeps working the queue until it is drained.
+    Only recent, unarchived mail is re-queued (see
+    ``memories.requeue_recent_emails``) — editing one preference must not blank
+    the classification of the entire mailbox. Returns the number re-queued; the
+    analysis manager runs in the background (up to 50 mails per pass) and the
+    periodic sweep in main.py keeps draining the queue.
     """
     from app.services.analysis_service import manager as analysis_mgr
 
-    count = await memories.requeue_all_emails(db)
+    count = await memories.requeue_recent_emails(db)
     if count:
         analysis_mgr.start(None)
     return count

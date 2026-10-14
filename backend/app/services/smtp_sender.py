@@ -65,7 +65,9 @@ def _smtp_send_sync(
 ) -> None:
     """Blocking SMTP session; runs in a worker thread via ``send_via_smtp``."""
     if port == 465:  # implicit TLS (Gmail / QQ / NetEase presets)
-        with smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT) as smtp:
+        with smtplib.SMTP_SSL(
+            host, port, timeout=SMTP_TIMEOUT, context=ssl.create_default_context()
+        ) as smtp:
             smtp.login(user, password)
             smtp.send_message(msg)
     else:  # STARTTLS (Outlook preset uses 587)

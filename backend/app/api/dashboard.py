@@ -23,6 +23,7 @@ from app.services.schedule_analyzer import (
     auto_handle_emails,
     get_schedule_candidates,
     mark_handled,
+    mark_unhandled,
 )
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -119,6 +120,16 @@ async def handle_email(
     return {"handled": success, "email_id": email_id}
 
 
+@router.post("/{email_id}/unhandle")
+async def unhandle_email(
+    email_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Undo a handle: clear ``handled_at`` so the mail returns to the board."""
+    success = await mark_unhandled(db, email_id)
+    return {"unhandled": success, "email_id": email_id}
+
+
 @router.post("/auto-handle")
 async def auto_handle(
     db: AsyncSession = Depends(get_db),
@@ -146,60 +157,36 @@ async def dashboard_summary(
     if account_id is not None:
         base_cond = base_cond + (UnifiedEmail.account_id == account_id,)
 
-    # Pending count (reply/review, not handled)
-    pending_count = (
+    # One round-trip instead of five: conditional aggregates replace the five
+    # sequential COUNT/MAX queries. The dashboard polls this endpoint every 10s.
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    actionable = UnifiedEmail.suggested_action.in_(["reply", "review"])
+    row = (
         await db.execute(
-            select(func.count(UnifiedEmail.id)).where(
-                *base_cond,
-                UnifiedEmail.suggested_action.in_(["reply", "review"]),
-            )
+            select(
+                func.count(UnifiedEmail.id)
+                .filter(actionable)
+                .label("pending_count"),
+                func.count(UnifiedEmail.id)
+                .filter(actionable, UnifiedEmail.priority_score >= 70)
+                .label("urgent_count"),
+                func.count(UnifiedEmail.id)
+                .filter(UnifiedEmail.is_read.is_(False))
+                .label("unread_count"),
+                func.max(UnifiedEmail.received_at).label("last_mail_at"),
+                func.count(UnifiedEmail.id)
+                .filter(UnifiedEmail.received_at >= today_start)
+                .label("today_count"),
+            ).where(*base_cond)
         )
-    ).scalar_one()
-
-    # Urgent (pending + high priority)
-    urgent_count = (
-        await db.execute(
-            select(func.count(UnifiedEmail.id)).where(
-                *base_cond,
-                UnifiedEmail.suggested_action.in_(["reply", "review"]),
-                UnifiedEmail.priority_score >= 70,
-            )
-        )
-    ).scalar_one()
-
-    # Unread (non-ad, not handled)
-    unread_count = (
-        await db.execute(
-            select(func.count(UnifiedEmail.id)).where(
-                *base_cond,
-                UnifiedEmail.is_read.is_(False),
-            )
-        )
-    ).scalar_one()
-
-    # Last mail timestamp (for polling change detection)
-    last_mail_at = (
-        await db.execute(
-            select(func.max(UnifiedEmail.received_at)).where(*base_cond)
-        )
-    ).scalar_one()
-
-    # Today count
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_count = (
-        await db.execute(
-            select(func.count(UnifiedEmail.id)).where(
-                *base_cond,
-                UnifiedEmail.received_at >= today_start,
-            )
-        )
-    ).scalar_one()
+    ).one()
 
     return {
-        "pending_count": pending_count,
-        "urgent_count": urgent_count,
-        "unread_count": unread_count,
-        "today_count": today_count,
-        "last_mail_at": last_mail_at.isoformat() if last_mail_at else None,
+        "pending_count": row.pending_count,
+        "urgent_count": row.urgent_count,
+        "unread_count": row.unread_count,
+        "today_count": row.today_count,
+        "last_mail_at": row.last_mail_at.isoformat() if row.last_mail_at else None,
     }

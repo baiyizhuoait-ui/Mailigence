@@ -21,11 +21,12 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import SessionLocal
+from app.models.blocked_sender import BlockedSender
 from app.models.classification_feedback import ClassificationFeedback
 from app.models.email import UnifiedEmail
 from app.models.email_category import EmailCategory
@@ -67,6 +68,16 @@ async def run_analysis(
     stmt = select(UnifiedEmail).where(
         (UnifiedEmail.analyzed_at.is_(None))
         | (UnifiedEmail.category.is_(None))
+    )
+    # Never spend an LLM call on mail that is already handled or comes from a
+    # blocked sender (blocked mail is force-classified at import time).
+    blocked_senders = select(BlockedSender.sender_email)
+    stmt = stmt.where(
+        UnifiedEmail.handled_at.is_(None),
+        or_(
+            UnifiedEmail.sender_email.is_(None),
+            UnifiedEmail.sender_email.not_in(blocked_senders),
+        ),
     )
     if account_id is not None:
         stmt = stmt.where(UnifiedEmail.account_id == account_id)
@@ -269,12 +280,23 @@ async def _find_cached(db: AsyncSession, email: UnifiedEmail) -> UnifiedEmail | 
 
 
 async def pending_count(db: AsyncSession, account_id: Optional[int] = None) -> int:
-    """Count emails waiting for analysis (unanalyzed or uncategorized)."""
+    """Count emails waiting for analysis (unanalyzed or uncategorized).
+
+    Mirrors the filters of ``run_analysis`` — handled mail and blocked senders
+    are excluded, so the sweep loop's "pending > 0" gate can't spin forever on
+    rows the analyzer deliberately skips.
+    """
     from sqlalchemy import func as _func
 
+    blocked_senders = select(BlockedSender.sender_email)
     stmt = select(_func.count(UnifiedEmail.id)).where(
         (UnifiedEmail.analyzed_at.is_(None))
-        | (UnifiedEmail.category.is_(None))
+        | (UnifiedEmail.category.is_(None)),
+        UnifiedEmail.handled_at.is_(None),
+        or_(
+            UnifiedEmail.sender_email.is_(None),
+            UnifiedEmail.sender_email.not_in(blocked_senders),
+        ),
     )
     if account_id is not None:
         stmt = stmt.where(UnifiedEmail.account_id == account_id)

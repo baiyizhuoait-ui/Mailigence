@@ -15,11 +15,11 @@ import asyncio
 import logging
 from typing import Any
 
-import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
+from app.services import http_client
 from app.services.ai_config import AiConfig, load_ai_config
 
 _log = logging.getLogger(__name__)
@@ -88,11 +88,10 @@ async def embed_text(cfg: AiConfig, text_value: str) -> list[float]:
         "Content-Type": "application/json",
     }
     body = {"model": model, "input": text_value}
-    async with httpx.AsyncClient(timeout=EMBED_TIMEOUT) as client:
-        resp = await client.post(url, headers=headers, json=body)
-        if resp.status_code != 200:
-            raise RuntimeError(f"Embedding HTTP {resp.status_code}: {resp.text[:200]}")
-        data = resp.json()
+    resp = await http_client.client.post(url, headers=headers, json=body, timeout=EMBED_TIMEOUT)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Embedding HTTP {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
     try:
         return [float(x) for x in data["data"][0]["embedding"]]
     except (KeyError, IndexError, TypeError, ValueError) as exc:

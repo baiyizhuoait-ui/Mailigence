@@ -47,6 +47,7 @@ async def list_emails(
     unread_only: bool = False,
     starred_only: bool = False,
     archived: bool = False,
+    is_advertisement: bool | None = None,
     limit: int = Query(100, le=500),
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
@@ -79,6 +80,17 @@ async def list_emails(
     else:
         stmt = stmt.where(UnifiedEmail.is_archived.is_(False))
         count_stmt = count_stmt.where(UnifiedEmail.is_archived.is_(False))
+    if is_advertisement is not None:
+        # ``= true`` must also include legacy NULL rows only when False is asked
+        # (NULL means "not analyzed yet", i.e. not an ad).
+        cond = (
+            UnifiedEmail.is_advertisement.is_(True)
+            if is_advertisement
+            else UnifiedEmail.is_advertisement.is_(False)
+            | UnifiedEmail.is_advertisement.is_(None)
+        )
+        stmt = stmt.where(cond)
+        count_stmt = count_stmt.where(cond)
     if q:
         pattern = f"%{q}%"
         cond = (

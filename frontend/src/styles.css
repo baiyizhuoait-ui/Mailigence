@@ -1103,10 +1103,25 @@ button {
 .full-body-frame {
   width: 100%;
   min-height: 320px;
-  max-height: 480px;
   border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
   border-radius: 8px;
   background: #fff;
+  display: block;
+  /* Height is set from the iframe's own scrollHeight on load so the reader
+     scrolls a single container instead of nested scrollbars. */
+}
+
+.detail-body-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.detail-images-hint {
+  font-size: 12px;
+  color: var(--text-faint, #888);
 }
 
 .full-body-text {
@@ -3745,6 +3760,44 @@ button {
 .dash-advisor-done-icon {
   color: var(--success, #7bc47f);
   font-weight: 700;
+}
+
+/* Undo toast shown after marking a mail handled — floats over the dashboard. */
+.dash-undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 16px;
+  background: var(--panel, #1c1c22);
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.dash-undo-toast.error {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+
+.dash-undo-btn {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.dash-undo-btn:hover {
+  text-decoration: underline;
 }
 
 .dash-advisor-schedule {

@@ -139,6 +139,7 @@ export const api = {
     unread_only?: boolean;
     starred_only?: boolean;
     archived?: boolean;
+    is_advertisement?: boolean;
     limit?: number;
     offset?: number;
   }) => {
@@ -218,10 +219,10 @@ export const api = {
 
   getAdStats: () => request<AdStats>("/ads/stats"),
 
-  batchAdAction: (action: BatchAdAction, email_ids: number[]) =>
+  batchAdAction: (action: BatchAdAction, email_ids: number[], all = false) =>
     request<BatchAdActionResult>("/ads/batch", {
       method: "POST",
-      body: JSON.stringify({ action, email_ids }),
+      body: JSON.stringify({ action, email_ids, all }),
     }),
 
   blockSenderByEmail: (email_id: number) =>
@@ -329,6 +330,13 @@ export const api = {
   handleEmail: (emailId: number) =>
     request<{ handled: boolean; email_id: number }>(
       `/dashboard/${emailId}/handle`,
+      { method: "POST" },
+    ),
+
+  // Undo a "handled" dismissal so the mail returns to the dashboard board.
+  unhandleEmail: (emailId: number) =>
+    request<{ unhandled: boolean; email_id: number }>(
+      `/dashboard/${emailId}/unhandle`,
       { method: "POST" },
     ),
 

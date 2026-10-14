@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import { NETEASE_IMAP_MAP, PROVIDER_PRESETS, type EmailAccount } from "../types";
@@ -26,6 +26,15 @@ export function AddAccountModal({ onClose, onCreated, oauthConfig }: Props) {
   const [smtpPort, setSmtpPort] = useState(465);
   const [step, setStep] = useState<Step>("form");
   const [error, setError] = useState("");
+
+  // Escape closes the modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const preset = PROVIDER_PRESETS.find((p) => p.platform === platform)!;
   const isCustom = platform === "imap";

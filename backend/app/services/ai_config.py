@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,6 +89,27 @@ class AiConfig:
         if self.analysis_mode == "rules_only" or self.provider == "anthropic":
             return False
         return bool(self.api_key and self.base_url and self.effective_embedding_model)
+
+
+def _host_of(url: str) -> str:
+    """Lower-cased hostname of a base_url, or "" when absent/unparseable."""
+    try:
+        return (urlparse(url or "").hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def env_key_allowed_for(base_url: str, provider: str | None = None) -> bool:
+    """Whether the env-wide API key may be used for ``base_url``.
+
+    The env key (``AI_API_KEY`` / ``ANTHROPIC_API_KEY``) belongs to the env
+    endpoint (``AI_BASE_URL``). Attaching it to an unrelated profile endpoint
+    would leak the key to whatever host the user typed (SSRF / key theft), so
+    we only allow the fallback when both hosts match.
+    """
+    _, env_url, _, _ = _env_fallback(provider)
+    host = _host_of(base_url)
+    return bool(host) and host == _host_of(env_url)
 
 
 def _env_fallback(provider: str | None) -> tuple[str, str, str, str]:
@@ -172,13 +194,23 @@ async def update_profile(
     api_key: str | None = None,
     num_ctx: int | None = None,
 ) -> AIProviderProfile:
-    """Edit a profile. Empty ``api_key`` keeps the stored key."""
+    """Edit a profile. Empty ``api_key`` keeps the stored key.
+
+    Exception: when ``base_url`` moves to a *different host* and no new key is
+    supplied, the stored (old-host) key is cleared. Keeping it would send the
+    key to the new address on the next probe/test call — an exfiltration path
+    for a malicious base_url. The user must re-enter the key for the new host.
+    """
     if label is not None:
         profile.label = label
     if provider_type is not None:
         profile.provider_type = provider_type
     if base_url is not None:
-        profile.base_url = (base_url or "").strip().rstrip("/")
+        new_url = (base_url or "").strip().rstrip("/")
+        host_changed = _host_of(new_url) != _host_of(profile.base_url)
+        profile.base_url = new_url
+        if host_changed and not (api_key or "").strip():
+            profile.api_key_encrypted = ""
     if model is not None:
         profile.model = (model or "").strip()
     if num_ctx is not None:
@@ -258,10 +290,16 @@ async def load_ai_config(db: AsyncSession) -> AiConfig:
         except crypto.EncryptionError:
             api_key = ""  # undecryptable -> treat as unset
     if not api_key:
-        # Profile without a stored key -> fall back to the env key for its type.
-        api_key = (
-            settings.anthropic_api_key if provider == "anthropic" else settings.ai_api_key
-        )
+        # Profile without a stored key -> borrow the env key ONLY when the
+        # profile points at the same host the env key belongs to. Falling back
+        # for an arbitrary base_url would send the global key to a third-party
+        # endpoint (key exfiltration / SSRF).
+        if env_key_allowed_for(profile.base_url or "", provider):
+            api_key = (
+                settings.anthropic_api_key
+                if provider == "anthropic"
+                else settings.ai_api_key
+            )
 
     # Context window: manual profile value wins, then the probe cache. When
     # neither applies we leave None — the Ollama request omits num_ctx and the

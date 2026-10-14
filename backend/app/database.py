@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
@@ -22,7 +23,9 @@ class Base(DeclarativeBase):
 
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.app_env == "development",
+    # SQL echo is opt-in: full statement logging formats every 1536-dim
+    # embedding vector and dominates startup + a lot of I/O in development.
+    echo=os.getenv("SQL_ECHO", "0") == "1",
     pool_pre_ping=True,
     # Recycle pooled connections so they never go stale (portable PostgreSQL
     # builds can drop long-idle connections); sized for the multi-account

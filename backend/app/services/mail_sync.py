@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.email import UnifiedEmail
+from app.models.blocked_sender import BlockedSender
 from app.models.email_account import AuthType, EmailAccount, SyncStatus
 from app.services import crypto, ms_graph, oauth
 from app.services.imap_client import ImapClient, NormalisedMail, open_connection
@@ -67,11 +68,27 @@ async def resolve_credential(account: EmailAccount) -> str:
 
 # --- upsert -----------------------------------------------------------------
 
+async def _blocked_sender_keys(db: AsyncSession, account_id: int) -> set[str]:
+    """Lower-cased sender addresses blocked for this account (incl. global)."""
+    result = await db.execute(
+        select(BlockedSender.sender_email).where(
+            (BlockedSender.account_id == account_id)
+            | (BlockedSender.account_id.is_(None))
+        )
+    )
+    return {e.strip().lower() for e in result.scalars().all() if e}
+
+
 async def upsert_mails(db: AsyncSession, account: EmailAccount, mails: list[NormalisedMail]) -> int:
     if not mails:
         return 0
+    # Blocked senders: mail from them is pre-classified on import so it never
+    # surfaces as unread in the inbox and never consumes an LLM analysis call.
+    blocked = await _blocked_sender_keys(db, account.id)
+    now = datetime.now(timezone.utc)
     rows = []
     for m in mails:
+        is_blocked = bool(m.sender_email) and m.sender_email.strip().lower() in blocked
         rows.append({
             "account_id": account.id,
             "platform": account.platform,
@@ -84,9 +101,15 @@ async def upsert_mails(db: AsyncSession, account: EmailAccount, mails: list[Norm
             "subject": m.subject,
             "body_snippet": m.body_snippet,
             "received_at": m.received_at,
-            "is_read": m.is_read,
+            "is_read": True if is_blocked else m.is_read,
             "has_reply": False,
             "raw_headers": m.raw_headers,
+            # Force-archive blocked mail so it is silent + pre-analyzed.
+            "is_advertisement": True if is_blocked else None,
+            "category": "marketing" if is_blocked else None,
+            "suggested_action": "ignore" if is_blocked else None,
+            "handled_at": now if is_blocked else None,
+            "analyzed_at": now if is_blocked else None,
         })
 
     stmt = insert(UnifiedEmail).values(rows)

@@ -14,6 +14,7 @@ opt-in enhancement that activates only when client id/secret are configured.
 from __future__ import annotations
 
 import secrets
+import time
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,8 +31,22 @@ from app.services.oauth import PROVIDER_PRESETS
 router = APIRouter(prefix="/api/oauth", tags=["oauth"])
 
 # In-memory state store (single-process dev). For multi-worker deploys, move to
-# a signed/short-lived store (e.g. DB row or JWT). state -> {"platform": ...}
-_state_store: dict[str, dict] = {}
+# a signed/short-lived store (e.g. DB row or JWT).
+# Each entry is ``(payload, created_at)``; entries expire after ``_STATE_TTL``
+# and the store is capped at ``_STATE_MAX`` so abandoned flows (user never
+# completes consent) can't grow memory without bound.
+_STATE_TTL = 600  # 10 minutes
+_STATE_MAX = 100
+_state_store: dict[str, tuple[dict, float]] = {}
+
+
+def _prune_states(now: float) -> None:
+    """Drop expired states and enforce the size cap (oldest first)."""
+    for key in [k for k, (_, ts) in _state_store.items() if now - ts > _STATE_TTL]:
+        _state_store.pop(key, None)
+    while len(_state_store) > _STATE_MAX:
+        oldest = min(_state_store.items(), key=lambda kv: kv[1][1])[0]
+        _state_store.pop(oldest, None)
 
 
 @router.get("/start")
@@ -40,7 +55,8 @@ async def oauth_start(provider: str, platform: str | None = None) -> dict:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     plat = platform or ("gmail" if provider == "google" else "outlook")
     state = secrets.token_urlsafe(24)
-    _state_store[state] = {"provider": provider, "platform": plat}
+    _prune_states(time.time())
+    _state_store[state] = ({"provider": provider, "platform": plat}, time.time())
     url = oauth.get_oauth_authorization_url(provider, state)
     return {"authorization_url": url, "state": state}
 
@@ -72,8 +88,13 @@ async def oauth_callback(
     #    duplicate of one already handled, or the backend restarted mid-flow —
     #    either way, bounce back so the user lands on a page instead of an
     #    opaque "Invalid state" error.
-    stored = _state_store.pop(state, None)
-    if not stored or stored.get("provider") != provider:
+    stored_entry = _state_store.pop(state, None)
+    stored = stored_entry[0] if stored_entry else None
+    if (
+        stored is None
+        or (time.time() - stored_entry[1]) > _STATE_TTL
+        or stored.get("provider") != provider
+    ):
         return RedirectResponse(url=f"{accounts_url}?oauth_status=stale")
 
     if not code:
@@ -94,6 +115,10 @@ async def oauth_callback(
 
     # Best-effort mailbox address from the id token (used to label the account).
     user_email = _email_from_id_token(tokens.get("id_token")) or ""
+    if not user_email:
+        # Without an address the account would be unusable (and would break the
+        # duplicate guard, which matches on email) — bail out explicitly.
+        return RedirectResponse(url=f"{accounts_url}?oauth_error=no_email")
 
     platform = stored["platform"]
     preset = PROVIDER_PRESETS.get(platform)

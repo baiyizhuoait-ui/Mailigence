@@ -198,11 +198,7 @@ export default function App() {
         {view === "search" ? (
           <SearchResults accounts={accounts} initialQ={searchQ} openEmailId={searchEmailId} />
         ) : view === "dashboard" ? (
-          loadingAccounts ? (
-            <div className="loading">{t("misc.loading")}</div>
-          ) : (
-            <DashboardView />
-          )
+          <DashboardView />
         ) : view === "accounts" ? (
           loadingAccounts ? (
             <div className="loading">{t("misc.loading")}</div>

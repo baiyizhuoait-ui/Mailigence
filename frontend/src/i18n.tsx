@@ -290,6 +290,12 @@ const zh: Dict = {
   "ads.selectAll": "全选（",
   "ads.batchDelete": "批量删除",
   "ads.batchMarkRead": "批量标记已读",
+  "ads.batchDeleteSelected": "删除选中",
+  "ads.batchMarkReadSelected": "标记选中已读",
+  "ads.clearAll": "清空全部广告",
+  "ads.confirmClearAll": "确认清空全部广告邮件？此操作会删除所有广告邮件，且不可撤销。",
+  "ads.prevPage": "上一页",
+  "ads.nextPage": "下一页",
   "ads.empty": "暂无广告邮件",
   "ads.emptySub":
     "AI 分析完成并标记为广告的邮件会汇总到这里，可批量清理或屏蔽发件人。",
@@ -449,6 +455,8 @@ const zh: Dict = {
   "detail.viewFull": "查看全文",
   "detail.fullLoading": "正在拉取全文…",
   "detail.fullError": "无法获取全文：",
+  "detail.loadImages": "加载远程图片",
+  "detail.imagesBlocked": "为保护隐私，远程图片已拦截",
   "detail.aiAnalysis": "AI 分析",
   "detail.category": "分类",
   "detail.priority": "优先级",
@@ -532,6 +540,9 @@ const zh: Dict = {
   "dash.group.this_week": "本周",
   "dash.group.upcoming": "即将到来",
   "dash.handle": "标记已处理",
+  "dash.handledToast": "已标记为已处理",
+  "dash.undo": "撤销",
+  "dash.undoFailed": "撤销失败：",
   "dash.noSchedule": "暂无日程",
   // AI chat
   "chat.title": "AI 邮件问答",
@@ -781,6 +792,12 @@ const en: Dict = {
   "ads.selectAll": "Select all (",
   "ads.batchDelete": "Batch delete",
   "ads.batchMarkRead": "Batch mark read",
+  "ads.batchDeleteSelected": "Delete selected",
+  "ads.batchMarkReadSelected": "Mark selected read",
+  "ads.clearAll": "Clear all ads",
+  "ads.confirmClearAll": "Clear ALL ad mail? This deletes every ad and cannot be undone.",
+  "ads.prevPage": "Previous",
+  "ads.nextPage": "Next",
   "ads.empty": "No ad mail",
   "ads.emptySub":
     "Mail flagged as ads by AI analysis appears here. Batch-clean or block senders.",
@@ -928,6 +945,8 @@ const en: Dict = {
   "detail.viewFull": "View full content",
   "detail.fullLoading": "Fetching full content…",
   "detail.fullError": "Could not fetch full content: ",
+  "detail.loadImages": "Load remote images",
+  "detail.imagesBlocked": "Remote images blocked to protect your privacy",
   "detail.aiAnalysis": "AI Analysis",
   "detail.category": "Category",
   "detail.priority": "Priority",
@@ -1008,6 +1027,9 @@ const en: Dict = {
   "dash.group.this_week": "This week",
   "dash.group.upcoming": "Upcoming",
   "dash.handle": "Mark handled",
+  "dash.handledToast": "Marked as handled",
+  "dash.undo": "Undo",
+  "dash.undoFailed": "Undo failed: ",
   "dash.noSchedule": "No schedule items",
   // AI chat
   "chat.title": "Ask your mail",
@@ -1055,7 +1077,7 @@ function loadSettings(): Settings {
     if (raw) {
       const parsed = JSON.parse(raw);
       return {
-        lang: parsed.lang ?? "en",
+        lang: parsed.lang ?? "zh",
         theme: parsed.theme ?? "dark",
         accent: parsed.accent ?? "amber",
         customAccent: parsed.customAccent || "",
@@ -1066,7 +1088,7 @@ function loadSettings(): Settings {
     /* ignore */
   }
   return {
-    lang: "en",
+    lang: "zh",
     theme: "dark",
     accent: "amber",
     customAccent: "",

@@ -34,6 +34,11 @@ _log = logging.getLogger(__name__)
 IDLE_POLL_TIMEOUT = 120
 # Back-off between reconnection attempts on error.
 RECONNECT_DELAY = 30
+# One-time startup grace period: each per-account IDLE task waits this long
+# before its first cycle so the initial IMAP connect + catch-up sync does not
+# compete with the first dashboard requests. Applies only to the very first
+# loop iteration (see ``_run``), never to reconnects.
+IDLE_START_DELAY = 15
 
 
 class IdleManager:
@@ -120,6 +125,9 @@ class IdleManager:
 
     async def _run(self, account_id: int) -> None:
         """Main IDLE loop for one account — reconnects on failure."""
+        # Startup grace period (one-time, first iteration only).
+        if IDLE_START_DELAY > 0:
+            await asyncio.sleep(IDLE_START_DELAY)
         while account_id not in self._stop_flags:
             try:
                 await self._run_one_cycle(account_id)

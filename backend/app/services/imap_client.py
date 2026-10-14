@@ -25,6 +25,7 @@ import imaplib
 import logging
 import re
 import socket
+import ssl
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.header import decode_header, make_header
@@ -299,7 +300,15 @@ class ImapClient:
         self.logout()
 
     def connect(self) -> None:
-        self._conn = imaplib.IMAP4_SSL(self._server, self._port, timeout=self._timeout)
+        # Explicit SSL context: without one imaplib still verifies the cert, but
+        # passing our own context makes certificate-chain + hostname checking
+        # intentional rather than relying on the library default.
+        self._conn = imaplib.IMAP4_SSL(
+            self._server,
+            self._port,
+            timeout=self._timeout,
+            ssl_context=ssl.create_default_context(),
+        )
         self._identify()
 
     def _identify(self) -> None:

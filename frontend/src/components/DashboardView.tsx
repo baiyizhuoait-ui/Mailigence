@@ -32,6 +32,8 @@ export function DashboardView() {
   const { t, lang } = useI18n();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [schedule, setSchedule] = useState<ScheduleResult | null>(null);
+  /** True until the first advisor fetch settles — drives the card skeleton. */
+  const [scheduleLoading, setScheduleLoading] = useState(true);
   const [pending, setPending] = useState<UnifiedEmail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -40,6 +42,11 @@ export function DashboardView() {
   const [handlingIds, setHandlingIds] = useState<Set<number>>(new Set());
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
   const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
+  // Undo affordance for the manual "mark handled" action: the id of the last
+  // mail we just handled, shown in a transient toast.
+  const [undoId, setUndoId] = useState<number | null>(null);
+  const [undoErr, setUndoErr] = useState<string | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | undefined>();
   const scheduleTimer = useRef<ReturnType<typeof setInterval> | undefined>();
   const prevSummaryRef = useRef<DashboardSummary | null>(null);
   // Fingerprint of the advisor data we last rendered. Sent back on every
@@ -99,6 +106,8 @@ export function DashboardView() {
     } catch (e) {
       done("fail");
       throw e;
+    } finally {
+      setScheduleLoading(false);
     }
   }, []);
 
@@ -123,16 +132,19 @@ export function DashboardView() {
       });
       okSummary("ok", `待处理 ${s.pending_count}`);
       okPending("ok", `${p.length} 封`);
-      await fetchSchedule();
     } catch {
-      /* ignore */
       okSummary("fail");
       okPending("fail");
     } finally {
+      // Core data is in: unlock the first paint and the boot splash now,
+      // without waiting for the slow AI schedule call below.
       setRefreshing(false);
       setLoading(false);
       bootReady();
     }
+    // AI schedule loads on its own chain; the advisor card shows a skeleton
+    // until it lands, so it can never block the dashboard's first paint.
+    fetchSchedule().catch(() => {});
   }, [fetchSchedule]);
 
   // Force sync: pull new mail from all accounts, then refresh dashboard.
@@ -215,6 +227,12 @@ export function DashboardView() {
           ),
         };
       });
+      // Offer an Undo window so an accidental click never drops a mail for
+      // good (the backend can clear handled_at again).
+      setUndoErr(null);
+      setUndoId(emailId);
+      if (undoTimer.current) clearTimeout(undoTimer.current);
+      undoTimer.current = setTimeout(() => setUndoId(null), 7000);
     } catch {
       /* ignore */
     } finally {
@@ -225,6 +243,21 @@ export function DashboardView() {
       });
     }
   }, []);
+
+  const undoHandled = useCallback(async () => {
+    if (undoId === null) return;
+    const id = undoId;
+    setUndoId(null);
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    try {
+      await api.unhandleEmail(id);
+      await fullRefresh();
+    } catch (e) {
+      setUndoErr(e instanceof Error ? e.message : String(e));
+      setUndoId(id);
+      undoTimer.current = setTimeout(() => setUndoId(null), 5000);
+    }
+  }, [undoId, fullRefresh]);
 
   // Build email lookup map.
   const emailMap = new Map(pending.map((e) => [e.id, e]));
@@ -282,6 +315,16 @@ export function DashboardView() {
       >
         {/* Left column: merged AI advisor (brief + actions + schedule) */}
         <div className="dash-left">
+          {!schedule && scheduleLoading && (
+            <div className="dash-brief-card dash-advisor-card">
+              <div className="dash-brief-header">
+                <span className="dash-brief-icon">✦</span>
+                <span className="dash-brief-title">{t("dash.aiAdvisor")}</span>
+              </div>
+              <p className="dash-brief-text">{t("misc.loading")}</p>
+            </div>
+          )}
+
           {schedule && (
             <div className="dash-brief-card dash-advisor-card">
               <div className="dash-brief-header">
@@ -436,6 +479,20 @@ export function DashboardView() {
             )
           }
         />
+      )}
+
+      {/* Undo toast for the manual "mark handled" action */}
+      {undoId !== null && (
+        <div className={`dash-undo-toast${undoErr ? " error" : ""}`} role="status">
+          <span>
+            {undoErr ? `${t("dash.undoFailed")}${undoErr}` : t("dash.handledToast")}
+          </span>
+          {!undoErr && (
+            <button type="button" className="dash-undo-btn" onClick={undoHandled}>
+              {t("dash.undo")}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

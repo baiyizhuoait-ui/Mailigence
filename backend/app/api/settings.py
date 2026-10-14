@@ -175,13 +175,25 @@ async def _get_profile(db: AsyncSession, profile_id: int) -> AIProviderProfile:
 
 
 def _profile_key(profile: AIProviderProfile) -> str:
-    """Decrypted key (or env fallback for the type) used for probing/testing."""
+    """Decrypted key used for probing/testing this profile.
+
+    The env-wide key may only be borrowed when the profile points at the same
+    host the env key was configured for; for any other (user-supplied) base_url
+    we return an empty key rather than sending the global secret to it.
+    """
     if profile.api_key_encrypted:
         try:
             return crypto.decrypt(profile.api_key_encrypted)
         except crypto.EncryptionError:
             return ""
-    return settings.anthropic_api_key if profile.provider_type == "anthropic" else settings.ai_api_key
+    provider = "anthropic" if profile.provider_type == "anthropic" else "openai"
+    if not ai_config.env_key_allowed_for(profile.base_url or "", provider):
+        return ""
+    return (
+        settings.anthropic_api_key
+        if provider == "anthropic"
+        else settings.ai_api_key
+    )
 
 
 def _guard_key_encryption(api_key: str) -> None:

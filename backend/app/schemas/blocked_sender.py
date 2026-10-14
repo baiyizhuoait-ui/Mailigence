@@ -34,6 +34,10 @@ class AdStatsOut(BaseModel):
 class BatchAdActionRequest(BaseModel):
     action: Literal["delete", "mark_read"]
     email_ids: list[int] = []
+    # Explicit opt-in for "operate on every ad in the mailbox". Without it an
+    # empty ``email_ids`` is rejected: a stray click with nothing selected used
+    # to silently wipe/mark thousands of historical ads.
+    all: bool = False
 
 
 class BatchAdActionResult(BaseModel):

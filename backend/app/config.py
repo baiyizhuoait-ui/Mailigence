@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     )
 
     # Application
+    # Bind to loopback by default: the API has no authentication, so listening
+    # on 0.0.0.0 would expose every mailbox to anyone on the same LAN/Wi-Fi.
+    # Set APP_HOST explicitly (and add auth) before binding to a public interface.
     app_env: str = "development"
-    app_host: str = "0.0.0.0"
+    app_host: str = "127.0.0.1"
     app_port: int = 8000
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
 

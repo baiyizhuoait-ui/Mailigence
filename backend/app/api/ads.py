@@ -163,14 +163,20 @@ async def batch_ad_action(
 ) -> BatchAdActionResult:
     """Batch delete or mark-read on ad mail.
 
-    When ``email_ids`` is empty the action applies to every mail with
-    ``is_advertisement=true``; otherwise it applies to the given ids.
+    Operates on ``email_ids`` when given. An empty ``email_ids`` is only
+    honoured with an explicit ``all=true`` (the "clear all ads" action);
+    otherwise it would apply to every historical ad by accident.
     Returns the number of affected rows.
     """
     if req.email_ids:
         cond = UnifiedEmail.id.in_(req.email_ids)
-    else:
+    elif req.all:
         cond = UnifiedEmail.is_advertisement.is_(True)
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail="未选择任何邮件：请先勾选要操作的邮件，或显式使用「清空全部广告」。",
+        )
 
     if req.action == "delete":
         stmt = delete(UnifiedEmail).where(cond)

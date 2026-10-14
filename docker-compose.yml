@@ -13,7 +13,9 @@ services:
       POSTGRES_PASSWORD: mailigence_dev_pw
       POSTGRES_DB: mailigence
     ports:
-      - "5432:5432"
+      # Loopback-only: exposing 5432 to the LAN lets anyone connect with the
+      # default dev password and dump/drop every mailbox.
+      - "127.0.0.1:5432:5432"
     volumes:
       - mailigence_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -34,7 +36,9 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      # Loopback-only: the FastAPI app has no auth, so a LAN-exposed 8000
+      # would let any device read all mail or send replies as the user.
+      - "127.0.0.1:8000:8000"
     volumes:
       # Persists the auto-generated CREDENTIAL_ENCRYPTION_KEY across restarts
       # (backend/entrypoint.sh writes it here on first start). Never delete
@@ -50,7 +54,8 @@ services:
       - backend
     ports:
       # nginx listens on 80 inside; mapped to 5173 to match the dev URL.
-      - "5173:80"
+      # Loopback-only: the frontend proxies /api to the unauthenticated backend.
+      - "127.0.0.1:5173:80"
 
 volumes:
   mailigence_pgdata:

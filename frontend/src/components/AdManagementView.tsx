@@ -3,7 +3,7 @@ import { api } from "../api";
 import { PLATFORM_LABEL, type AdStats, type BlockedSender, type EmailCategory, type UnifiedEmail } from "../types";
 import { useI18n } from "../i18n";
 
-const AD_LIST_LIMIT = 500;
+const AD_PAGE_SIZE = 50;
 
 type Tab = "ads" | "blocked";
 
@@ -24,6 +24,8 @@ export function AdManagementView() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [tab, setTab] = useState<Tab>("ads");
   const [categories, setCategories] = useState<EmailCategory[]>([]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
 
   // Dynamic category labels (name -> display label) from the category table.
   const catLabel = useCallback(
@@ -47,19 +49,29 @@ export function AdManagementView() {
     setLoading(true);
     setError("");
     try {
+      // Query the real ad set server-side (paginated) instead of pulling the
+      // last 500 inbox mails and filtering client-side — that made the list
+      // disagree with the stats and hid archived/older ads.
       const [statsRes, emailsRes, blockedRes] = await Promise.all([
         api.getAdStats().catch((e) => {
           throw e;
         }),
-        api.listEmails({ limit: AD_LIST_LIMIT, offset: 0 }).catch((e) => {
-          throw e;
-        }),
+        api
+          .listEmails({
+            is_advertisement: true,
+            limit: AD_PAGE_SIZE,
+            offset: page * AD_PAGE_SIZE,
+          })
+          .catch((e) => {
+            throw e;
+          }),
         api.listBlockedSenders().catch((e) => {
           throw e;
         }),
       ]);
       setStats(statsRes);
-      setAds(emailsRes.items.filter((m) => m.is_advertisement === true));
+      setAds(emailsRes.items);
+      setTotal(emailsRes.total);
       setBlocked(blockedRes);
       setSelectedIds(new Set());
     } catch (e) {
@@ -67,7 +79,7 @@ export function AdManagementView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     loadAll();
@@ -101,13 +113,15 @@ export function AdManagementView() {
 
   async function runBatchAction(action: "delete" | "mark_read") {
     const ids = Array.from(selectedIds);
-    const scope = ids.length > 0 ? `${ids.length} ${t("account.count")}` : t("mailbox.all");
+    // Nothing selected → do nothing. The backend also rejects an empty id list
+    // unless ``all=true`` is explicit, so a stray click can't wipe the mailbox.
+    if (ids.length === 0) return;
     const verb = action === "delete" ? t("action.delete") : t("mailbox.markRead");
-    if (ids.length === 0 && ads.length === 0) return;
     if (
-      ids.length === 0 &&
       action === "delete" &&
-      !window.confirm(`${t("action.confirm")}${verb}${t("mailbox.all")}${t("ads.title")}（${scope}）？${t("ads.confirmAction")}`)
+      !window.confirm(
+        `${t("action.confirm")}${verb} ${ids.length} ${t("account.count")}${t("ads.title")}？${t("ads.confirmAction")}`,
+      )
     ) {
       return;
     }
@@ -116,6 +130,21 @@ export function AdManagementView() {
     try {
       const res = await api.batchAdAction(action, ids);
       showToast("success", `${t("ads.affected")}${verb} ${res.affected} ${t("account.count")}${t("ads.title")}`);
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runClearAll(action: "delete" | "mark_read") {
+    if (!window.confirm(t("ads.confirmClearAll"))) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await api.batchAdAction(action, [], true);
+      showToast("success", `${t("ads.affected")}${t("ads.clearAll")} ${res.affected} ${t("account.count")}`);
       await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -314,16 +343,24 @@ export function AdManagementView() {
               <button
                 className="btn small danger"
                 onClick={() => runBatchAction("delete")}
-                disabled={busy || ads.length === 0}
+                disabled={busy || selectedIds.size === 0}
               >
-                {t("ads.batchDelete")}
+                {t("ads.batchDeleteSelected")}（{selectedIds.size}）
               </button>
               <button
                 className="btn small primary-soft"
                 onClick={() => runBatchAction("mark_read")}
-                disabled={busy || ads.length === 0}
+                disabled={busy || selectedIds.size === 0}
               >
-                {t("ads.batchMarkRead")}
+                {t("ads.batchMarkReadSelected")}（{selectedIds.size}）
+              </button>
+              {/* Destructive whole-mailbox action — kept separate + confirmed. */}
+              <button
+                className="btn small ghost"
+                onClick={() => runClearAll("delete")}
+                disabled={busy || total === 0}
+              >
+                {t("ads.clearAll")}
               </button>
             </div>
           </div>
@@ -360,6 +397,28 @@ export function AdManagementView() {
                     {blockedAds.map((m) => renderAdRow(m, true))}
                   </ul>
                 </>
+              )}
+              {total > AD_PAGE_SIZE && (
+                <div className="ad-pager">
+                  <button
+                    className="btn small ghost"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={busy || page === 0}
+                  >
+                    {t("ads.prevPage")}
+                  </button>
+                  <span className="hint">
+                    {page * AD_PAGE_SIZE + 1}–
+                    {Math.min((page + 1) * AD_PAGE_SIZE, total)} / {total}
+                  </span>
+                  <button
+                    className="btn small ghost"
+                    onClick={() => setPage((p) => p + 1)}
+                    disabled={busy || (page + 1) * AD_PAGE_SIZE >= total}
+                  >
+                    {t("ads.nextPage")}
+                  </button>
+                </div>
               )}
             </>
           )}

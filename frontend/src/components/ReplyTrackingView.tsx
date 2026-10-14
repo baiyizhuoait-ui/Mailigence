@@ -311,6 +311,15 @@ function ThreadDialog({ email, onClose }: ThreadDialogProps) {
     sent: t("replies.sent"),
   };
 
+  // Escape closes the thread dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);

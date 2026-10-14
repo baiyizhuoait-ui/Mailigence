@@ -35,7 +35,7 @@ from app.api.settings import router as settings_router
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models.email_account import EmailAccount
-from app.services import mail_sync, reconcile_orphans
+from app.services import http_client, mail_sync, reconcile_orphans
 from app.services.idle_manager import manager as idle_manager
 
 _log = logging.getLogger(__name__)
@@ -187,6 +187,8 @@ async def lifespan(app: FastAPI):
     sync_task.cancel()
     analysis_task.cancel()
     embedding_task.cancel()
+    # Close the shared HTTP client's keep-alive connection pool.
+    await http_client.aclose()
 
 
 app = FastAPI(
@@ -232,7 +234,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Internal server error: {exc}"},
+        content={"detail": "Internal server error"},
     )
 
 

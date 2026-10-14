@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import {
@@ -46,6 +46,25 @@ function priorityClass(score: number | null): string {
   return "priority-low";
 }
 
+// Wrap the email HTML in a document with a strict CSP so opening a marketing
+// or phishing mail can't phone home: with `img-src data: cid:` remote tracking
+// pixels stay blocked (no IP / read-time leak). The user can opt in per mail
+// via the "load remote images" toggle, which widens img-src to http(s).
+function buildIframeDoc(html: string, allowRemoteImages: boolean): string {
+  const imgSrc = allowRemoteImages ? "data: cid: http: https:" : "data: cid:";
+  const csp =
+    `default-src 'none'; style-src 'unsafe-inline'; ` +
+    `img-src ${imgSrc}; font-src data:;`;
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+  if (/<head[\s>]/i.test(html)) {
+    return html.replace(/<head([^>]*)>/i, `<head$1>${meta}`);
+  }
+  return (
+    `<!DOCTYPE html><html><head><meta charset="utf-8">${meta}</head>` +
+    `<body>${html}</body></html>`
+  );
+}
+
 export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   const { t } = useI18n();
   const [email, setEmail] = useState<UnifiedEmail | null>(null);
@@ -56,6 +75,9 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   const [fullBody, setFullBody] = useState<{ html: string; text: string } | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [fullError, setFullError] = useState<string | null>(null);
+  // Per-mail opt-in to load remote images in the HTML preview (off = privacy).
+  const [loadRemoteImages, setLoadRemoteImages] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // ---- AI reply drafts ----
   const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
   const [draftOpen, setDraftOpen] = useState(false);
@@ -244,6 +266,16 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     }
   }
 
+  // Escape closes the modal, matching the backdrop click behaviour.
+  useEffect(() => {
+    if (emailId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [emailId, onClose]);
+
   useEffect(() => {
     if (emailId === null) {
       setEmail(null);
@@ -253,6 +285,7 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     setLoading(true);
     setFullBody(null);
     setFullError(null);
+    setLoadRemoteImages(false);
     // Drafts belong to a single email — reset when switching.
     setDraftOpen(false);
     setDrafts(null);
@@ -343,12 +376,47 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                 </div>
                 {fullBody ? (
                   fullBody.html ? (
-                    <iframe
-                      className="full-body-frame"
-                      sandbox=""
-                      srcDoc={fullBody.html}
-                      title={t("detail.viewFull")}
-                    />
+                    <>
+                      <div className="detail-body-tools">
+                        <span className="detail-images-hint">
+                          {t("detail.imagesBlocked")}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn small ghost"
+                          onClick={() => setLoadRemoteImages((v) => !v)}
+                        >
+                          {t("detail.loadImages")}
+                        </button>
+                      </div>
+                      {/* allow-same-origin (without allow-scripts) lets us
+                          measure the document for auto-height; the framed HTML
+                          still can't run JS, and the CSP meta blocks remote
+                          images so tracking pixels can't load. */}
+                      <iframe
+                        ref={iframeRef}
+                        className="full-body-frame"
+                        sandbox="allow-same-origin"
+                        srcDoc={buildIframeDoc(fullBody.html, loadRemoteImages)}
+                        title={t("detail.viewFull")}
+                        onLoad={(e) => {
+                          // Grow to fit the mail so the user scrolls one
+                          // container instead of nested scrollbars.
+                          try {
+                            const doc = e.currentTarget.contentDocument;
+                            if (doc?.body) {
+                              const h = Math.min(
+                                Math.max(doc.body.scrollHeight + 16, 320),
+                                2000,
+                              );
+                              e.currentTarget.style.height = `${h}px`;
+                            }
+                          } catch {
+                            /* opaque origin — keep the CSS min-height */
+                          }
+                        }}
+                      />
+                    </>
                   ) : (
                     <pre className="full-body-text">{fullBody.text}</pre>
                   )

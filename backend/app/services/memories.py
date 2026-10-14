@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select, update
@@ -166,14 +166,30 @@ async def delete_memory(db: AsyncSession, memory_id: int) -> bool:
     return True
 
 
-async def requeue_all_emails(db: AsyncSession) -> int:
-    """Re-queue every stored email for a fresh classification pass.
+# How far back a memory edit re-classifies mail. Older / archived mail keeps
+# its existing classification: re-running the whole mailbox on every preference
+# tweak blanked thousands of labels and burned an equivalent number of LLM calls.
+REQUEUE_WINDOW_DAYS = 14
 
-    Clears ``category`` (keeps ``analyzed_at``) so the analysis sweep picks the
-    mails up again. Because ``analyzed_at`` is kept, the dedup cache is skipped
-    and each mail gets a fresh LLM classification that honours the latest AI
-    memory — i.e. historical mail is re-classified under the new preferences.
+
+async def requeue_recent_emails(db: AsyncSession, days: int = REQUEUE_WINDOW_DAYS) -> int:
+    """Re-queue recent, unarchived mail for a fresh classification pass.
+
+    Only mail received within the last ``days`` days (and not archived) has its
+    ``category`` cleared so the analysis sweep picks it up again. ``analyzed_at``
+    is kept, which skips the dedup cache and forces a real re-classification
+    that honours the latest AI memory — without touching history the user has
+    already filed away.
     """
-    result = await db.execute(update(UnifiedEmail).values(category=None))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    result = await db.execute(
+        update(UnifiedEmail)
+        .where(
+            UnifiedEmail.is_archived.is_(False),
+            UnifiedEmail.received_at.is_not(None),
+            UnifiedEmail.received_at >= since,
+        )
+        .values(category=None)
+    )
     await db.commit()
     return result.rowcount or 0

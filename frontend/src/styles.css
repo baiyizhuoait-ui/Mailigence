@@ -1085,6 +1085,37 @@ button {
   color: var(--text-faint);
 }
 
+/* Recipients: collapse to a single truncated line; click to reveal them all. */
+.detail-meta-row .detail-recipients {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail-meta-row .detail-recipients.expanded {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+
+.detail-recipients-toggle {
+  flex-shrink: 0;
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.detail-recipients-toggle:hover {
+  text-decoration: underline;
+}
+
 .detail-body {
   margin-bottom: 16px;
 }
@@ -3412,7 +3443,9 @@ button {
   width: 2px;
   transform: translateX(-50%);
   border-radius: 2px;
-  background: var(--border-soft);
+  /* Invisible until hovered/focused/dragged: the wide column still carries a
+     col-resize cursor, so the divider is discoverable without a visible seam. */
+  background: transparent;
   transition: background 0.15s ease, width 0.15s ease;
 }
 
@@ -3734,21 +3767,81 @@ button {
   flex-direction: column;
 }
 
+/* Card body: three independently-sized blocks. The text summary keeps its
+   natural height (priority); the two lists share whatever vertical space is
+   left and scroll inside their own block when their content overflows, so
+   nothing is ever squashed to fit. */
+.dash-advisor-board {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto; /* last resort: the whole board scrolls when too tight */
+  padding-right: 2px;
+}
+
+.dash-advisor-block {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+/* Summary — sizes to its own content, never compressed or clipped. */
+.dash-advisor-block.block-brief {
+  flex: 0 0 auto;
+}
+
+/* Lists — share the remaining height and scroll within their own block. */
+.dash-advisor-block.block-emails,
+.dash-advisor-block.block-schedule {
+  flex: 1 1 auto;
+  min-height: 88px;
+}
+
+.dash-advisor-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.dash-advisor-block-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dash-advisor-block-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--panel-3);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
 .dash-advisor-actions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 14px;
   overflow-y: auto;
   min-height: 0;
-  flex: 1;
+  flex: 1 1 auto;
 }
 
 .dash-advisor-done {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 0;
   padding: 14px 16px;
   background: var(--panel-2);
   border: 1px solid var(--border-soft);
@@ -3804,9 +3897,9 @@ button {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 14px;
   overflow-y: auto;
   min-height: 0;
+  flex: 1 1 auto;
 }
 
 .dash-advisor-chip {
@@ -3814,6 +3907,7 @@ button {
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
+  flex-shrink: 0; /* never squash a chip — the list scrolls instead */
   background: var(--panel-2);
   border: 1px solid var(--border-soft);
   border-radius: 10px;
@@ -3931,6 +4025,8 @@ button {
   display: flex;
   align-items: stretch;
   gap: 0;
+  min-height: 76px;
+  flex-shrink: 0; /* never squash a card — the list scrolls instead */
   background: var(--panel-2);
   border-radius: 10px;
   border: 1px solid var(--border-soft);

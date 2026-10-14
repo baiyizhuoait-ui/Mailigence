@@ -80,6 +80,8 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   const [fullError, setFullError] = useState<string | null>(null);
   // Per-mail opt-in to load remote images in the HTML preview (off = privacy).
   const [loadRemoteImages, setLoadRemoteImages] = useState(false);
+  // Recipients collapse to a single line by default; the user expands them.
+  const [recipientsExpanded, setRecipientsExpanded] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // Watches the framed document so the iframe keeps growing as remote images
   // (or web fonts) finish loading after the initial onLoad fires.
@@ -317,6 +319,11 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     };
   }, [emailId, onReadChange]);
 
+  // Collapse the recipient list again whenever a different mail is opened.
+  useEffect(() => {
+    setRecipientsExpanded(false);
+  }, [emailId]);
+
   // Grow the framed document to its full height so the user scrolls a single
   // container instead of fighting nested scrollbars. No upper cap: long mails
   // stay fully readable (the outer modal-body already scrolls).
@@ -397,7 +404,24 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                 {email.recipients && email.recipients.length > 0 && (
                   <div className="detail-meta-row">
                     <span className="dim">{t("detail.recipients")}</span>
-                    <span className="mono">{email.recipients.join(", ")}</span>
+                    <span
+                      className={`mono detail-recipients${recipientsExpanded ? " expanded" : ""}`}
+                      title={email.recipients.join(", ")}
+                    >
+                      {email.recipients.join(", ")}
+                    </span>
+                    {email.recipients.length > 2 && (
+                      <button
+                        type="button"
+                        className="detail-recipients-toggle"
+                        aria-expanded={recipientsExpanded}
+                        onClick={() => setRecipientsExpanded((v) => !v)}
+                      >
+                        {recipientsExpanded
+                          ? t("detail.recipientsCollapse")
+                          : t("detail.recipientsExpand")}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

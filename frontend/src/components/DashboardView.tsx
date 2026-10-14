@@ -334,112 +334,144 @@ export function DashboardView() {
                   {schedule.source === "ai" ? "AI" : "Rules"}
                 </span>
               </div>
-              <p className="dash-brief-text">{schedule.daily_brief}</p>
+              <div className="dash-advisor-board">
+                {/* Block 1 — text summary; keeps its natural height first. */}
+                <section className="dash-advisor-block block-brief">
+                  <div className="dash-advisor-block-head">
+                    <span className="dash-advisor-block-title">
+                      {t("dash.dailyBrief")}
+                    </span>
+                  </div>
+                  <p className="dash-brief-text">{schedule.daily_brief}</p>
+                </section>
 
-              {/* Suggested actions — what to do, in order */}
-              {queueEmails.length === 0 ? (
-                <div className="dash-advisor-done">
-                  <span className="dash-advisor-done-icon">✓</span>
-                  {t("dash.allDone")}
-                </div>
-              ) : (
-                <div className="dash-advisor-actions">
-                  {queueEmails.map((item, idx) => {
-                    const email = item.email!;
-                    const isHandling = handlingIds.has(item.email_id);
-                    return (
-                      <div
-                        key={item.email_id}
-                        className="dash-queue-item"
-                        onClick={() => setSelectedEmailId(item.email_id)}
-                      >
-                        <div className="dash-queue-rank">{idx + 1}</div>
-                        <div
-                          className="dash-queue-bar"
-                          style={{ background: URGENCY_COLORS[item.urgency] }}
-                        />
-                        <div className="dash-queue-body">
-                          <div className="dash-queue-subject">
-                            {email.subject || t("misc.noSubject")}
-                          </div>
-                          <div className="dash-queue-meta">
-                            <span className="dash-queue-sender">
-                              {email.sender || t("misc.unknownSender")}
-                            </span>
-                            {email.received_at && (
-                              <span className="dash-queue-time">
-                                {timeFmt(email.received_at)}
-                              </span>
-                            )}
-                          </div>
-                          <div className="dash-queue-reason">
-                            <span
-                              className="dash-urgency-tag"
-                              style={{ color: URGENCY_COLORS[item.urgency] }}
-                            >
-                              {t(`dash.urgency.${item.urgency}`)}
-                            </span>
-                            <span
-                              className="dash-reason-text"
-                              title={item.reason}
-                            >
-                              {item.action || item.reason}
-                            </span>
-                            <span className="dash-est-time">
-                              ~{item.estimated_minutes}{t("dash.min")}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="dash-queue-actions">
-                          <span className={`platform-badge sm ${email.platform}`}>
-                            {PLATFORM_LABEL[email.platform] ?? email.platform}
-                          </span>
-                          <button
-                            className="dash-handle-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleEmail(item.email_id);
-                            }}
-                            disabled={isHandling}
-                            title={t("dash.handle")}
+                {/* Block 2 — priority mail; shares leftover height, scrolls. */}
+                <section className="dash-advisor-block block-emails">
+                  <div className="dash-advisor-block-head">
+                    <span className="dash-advisor-block-title">
+                      {t("dash.advisor.important")}
+                    </span>
+                    {queueEmails.length > 0 && (
+                      <span className="dash-advisor-block-count">
+                        {queueEmails.length}
+                      </span>
+                    )}
+                  </div>
+                  {queueEmails.length === 0 ? (
+                    <div className="dash-advisor-done">
+                      <span className="dash-advisor-done-icon">✓</span>
+                      {t("dash.allDone")}
+                    </div>
+                  ) : (
+                    <div className="dash-advisor-actions">
+                      {queueEmails.map((item, idx) => {
+                        const email = item.email!;
+                        const isHandling = handlingIds.has(item.email_id);
+                        return (
+                          <div
+                            key={item.email_id}
+                            className="dash-queue-item"
+                            onClick={() => setSelectedEmailId(item.email_id)}
                           >
-                            {isHandling ? "…" : "✓"}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                            <div className="dash-queue-rank">{idx + 1}</div>
+                            <div
+                              className="dash-queue-bar"
+                              style={{ background: URGENCY_COLORS[item.urgency] }}
+                            />
+                            <div className="dash-queue-body">
+                              <div className="dash-queue-subject">
+                                {email.subject || t("misc.noSubject")}
+                              </div>
+                              <div className="dash-queue-meta">
+                                <span className="dash-queue-sender">
+                                  {email.sender || t("misc.unknownSender")}
+                                </span>
+                                {email.received_at && (
+                                  <span className="dash-queue-time">
+                                    {timeFmt(email.received_at)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="dash-queue-reason">
+                                <span
+                                  className="dash-urgency-tag"
+                                  style={{ color: URGENCY_COLORS[item.urgency] }}
+                                >
+                                  {t(`dash.urgency.${item.urgency}`)}
+                                </span>
+                                <span
+                                  className="dash-reason-text"
+                                  title={item.reason}
+                                >
+                                  {item.action || item.reason}
+                                </span>
+                                <span className="dash-est-time">
+                                  ~{item.estimated_minutes}{t("dash.min")}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="dash-queue-actions">
+                              <span className={`platform-badge sm ${email.platform}`}>
+                                {PLATFORM_LABEL[email.platform] ?? email.platform}
+                              </span>
+                              <button
+                                className="dash-handle-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEmail(item.email_id);
+                                }}
+                                disabled={isHandling}
+                                title={t("dash.handle")}
+                              >
+                                {isHandling ? "…" : "✓"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
 
-              {/* Upcoming time-sensitive items as compact chips */}
-              {(schedule.schedule_items?.length ?? 0) > 0 && (
-                <div className="dash-advisor-schedule">
-                  {schedule.schedule_items.map((item, i) => (
-                    <button
-                      key={i}
-                      className="dash-advisor-chip"
-                      onClick={() => setSelectedEmailId(item.email_id)}
-                      title={item.title}
-                    >
-                      <span className="dash-advisor-chip-icon">
-                        {TYPE_ICONS[item.type] || "📋"}
+                {/* Block 3 — schedule chips; shares leftover height, scrolls. */}
+                {(schedule.schedule_items?.length ?? 0) > 0 && (
+                  <section className="dash-advisor-block block-schedule">
+                    <div className="dash-advisor-block-head">
+                      <span className="dash-advisor-block-title">
+                        {t("dash.schedule")}
                       </span>
-                      <span className="dash-advisor-chip-title">
-                        {item.title}
+                      <span className="dash-advisor-block-count">
+                        {schedule.schedule_items.length}
                       </span>
-                      {(item.date || item.time) && (
-                        <span className="dash-advisor-chip-time mono">
-                          {[item.date, item.time].filter(Boolean).join(" ")}
-                        </span>
-                      )}
-                      <span className={`dash-schedule-type ${item.type}`}>
-                        {t(`dash.type.${item.type}`)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
+                    </div>
+                    <div className="dash-advisor-schedule">
+                      {schedule.schedule_items.map((item, i) => (
+                        <button
+                          key={i}
+                          className="dash-advisor-chip"
+                          onClick={() => setSelectedEmailId(item.email_id)}
+                          title={item.title}
+                        >
+                          <span className="dash-advisor-chip-icon">
+                            {TYPE_ICONS[item.type] || "📋"}
+                          </span>
+                          <span className="dash-advisor-chip-title">
+                            {item.title}
+                          </span>
+                          {(item.date || item.time) && (
+                            <span className="dash-advisor-chip-time mono">
+                              {[item.date, item.time].filter(Boolean).join(" ")}
+                            </span>
+                          )}
+                          <span className={`dash-schedule-type ${item.type}`}>
+                            {t(`dash.type.${item.type}`)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
 
               {lastUpdated && (
                 <div className="dash-last-updated">

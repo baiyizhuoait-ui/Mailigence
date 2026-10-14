@@ -45,6 +45,30 @@ LOW_CONFIDENCE_THRESHOLD = 0.5  # surface these to the UI as "待确认" (P1-5)
 CATEGORY_INVENTION_THRESHOLD = 0.7
 
 
+def _not_blocked_condition():
+    """Correlated SQL predicate: the outer email's sender is NOT blocked.
+
+    A block suppresses analysis only when it targets the email's own account
+    (``account_id`` matches) or is global (``account_id IS NULL``) — a block
+    created on account A must never silence account B's legit mail. Address
+    matching is case-insensitive and whitespace-trimmed so manually-entered
+    blocks with stray casing still take effect.
+    """
+    blocked = (
+        select(BlockedSender.id)
+        .where(
+            func.lower(func.trim(BlockedSender.sender_email))
+            == func.lower(func.trim(UnifiedEmail.sender_email)),
+            or_(
+                BlockedSender.account_id == UnifiedEmail.account_id,
+                BlockedSender.account_id.is_(None),
+            ),
+        )
+        .exists()
+    )
+    return or_(UnifiedEmail.sender_email.is_(None), ~blocked)
+
+
 # --- core -------------------------------------------------------------------
 
 async def run_analysis(
@@ -71,13 +95,9 @@ async def run_analysis(
     )
     # Never spend an LLM call on mail that is already handled or comes from a
     # blocked sender (blocked mail is force-classified at import time).
-    blocked_senders = select(BlockedSender.sender_email)
     stmt = stmt.where(
         UnifiedEmail.handled_at.is_(None),
-        or_(
-            UnifiedEmail.sender_email.is_(None),
-            UnifiedEmail.sender_email.not_in(blocked_senders),
-        ),
+        _not_blocked_condition(),
     )
     if account_id is not None:
         stmt = stmt.where(UnifiedEmail.account_id == account_id)
@@ -199,11 +219,15 @@ async def run_analysis(
         email.summary = result.summary
         email.suggested_action = result.suggested_action
         email.analyzed_at = datetime.now(timezone.utc)
-        await db.commit()
 
         analyzed += 1
         if on_progress:
             on_progress(analyzed, total)
+
+    # Single commit for the whole batch (was one per email): round trips drop
+    # from O(n) to O(1) while the loop above only mutated in-memory ORM rows.
+    if analyzed:
+        await db.commit()
 
     if failures:
         # Surface AI failures (especially ai_only mode) instead of silently
@@ -245,12 +269,15 @@ async def _register_categories(
             if name in known:
                 continue
         known.append(name)
-        db.add(EmailCategory(name=name, label=name, is_system=False))
         try:
-            await db.flush()
+            # SAVEPOINT so a concurrent duplicate only rolls back this insert —
+            # a plain rollback would discard the batch's uncommitted analysis
+            # edits now that the whole batch is committed once at the end.
+            async with db.begin_nested():
+                db.add(EmailCategory(name=name, label=name, is_system=False))
+                await db.flush()
         except IntegrityError:
             # A concurrent analysis run created it first — reuse the row.
-            await db.rollback()
             existing = (
                 await db.execute(
                     select(EmailCategory.name).where(EmailCategory.name == name)
@@ -288,15 +315,11 @@ async def pending_count(db: AsyncSession, account_id: Optional[int] = None) -> i
     """
     from sqlalchemy import func as _func
 
-    blocked_senders = select(BlockedSender.sender_email)
     stmt = select(_func.count(UnifiedEmail.id)).where(
         (UnifiedEmail.analyzed_at.is_(None))
         | (UnifiedEmail.category.is_(None)),
         UnifiedEmail.handled_at.is_(None),
-        or_(
-            UnifiedEmail.sender_email.is_(None),
-            UnifiedEmail.sender_email.not_in(blocked_senders),
-        ),
+        _not_blocked_condition(),
     )
     if account_id is not None:
         stmt = stmt.where(UnifiedEmail.account_id == account_id)

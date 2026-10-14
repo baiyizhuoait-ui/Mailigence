@@ -229,9 +229,6 @@ async def analyze_schedule(
     the cached result is returned without any LLM call — the dashboard
     "refresh" button becomes instant and free when nothing changed.
     """
-    # Auto-handle first, so stale emails don't clutter the queue.
-    await auto_handle_emails(db)
-
     cache_key = f"schedule:{account_id or 'all'}"
     fingerprint = await get_window_fingerprint(db)
     cached = _cache.get(cache_key)

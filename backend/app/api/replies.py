@@ -40,6 +40,9 @@ async def _update_has_reply(db: AsyncSession, account_id: int) -> int:
     )).scalars().all()
 
     matched = 0
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
     for sent in sent_emails:
         in_reply_to = ""
         if isinstance(sent.raw_headers, dict):
@@ -57,6 +60,10 @@ async def _update_has_reply(db: AsyncSession, account_id: int) -> int:
         )).scalars().first()
         if inbox_email and not inbox_email.has_reply:
             inbox_email.has_reply = True
+            # Sink handled_at here so a replied mail leaves the dashboard /
+            # reply queue without a write transaction on every /pending read.
+            if inbox_email.handled_at is None:
+                inbox_email.handled_at = now
             matched += 1
     if matched:
         await db.commit()
@@ -153,15 +160,11 @@ async def list_pending_replies(
 ) -> list[UnifiedEmail]:
     """返回待回复邮件列表。
 
-    Auto-handles stale mail first, then queries
-    direction=INBOX AND suggested_action="reply" AND has_reply=false
+    Queries direction=INBOX AND suggested_action="reply" AND has_reply=false
     AND handled_at IS NULL，按 priority_score DESC, received_at DESC 排序。
     """
-    # Keep the reply queue consistent with the dashboard: dismiss stale
-    # (read, old) and already-handled mail so it doesn't linger forever.
-    from app.services.schedule_analyzer import auto_handle_emails
-    await auto_handle_emails(db)
-
+    # Pure read: replied mail is already handled_at at the source, so this
+    # queue stays consistent with the dashboard without a write on every poll.
     stmt = select(UnifiedEmail).where(
         UnifiedEmail.direction == MailDirection.INBOX,
         UnifiedEmail.suggested_action == "reply",

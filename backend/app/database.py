@@ -82,6 +82,13 @@ async def init_db() -> None:
             "ALTER TABLE unified_emails "
             "ADD COLUMN IF NOT EXISTS handled_at TIMESTAMP WITH TIME ZONE"
         )
+        # Full body cached on first on-demand fetch (avoids re-hitting IMAP/Graph).
+        await conn.exec_driver_sql(
+            "ALTER TABLE unified_emails ADD COLUMN IF NOT EXISTS body_html TEXT"
+        )
+        await conn.exec_driver_sql(
+            "ALTER TABLE unified_emails ADD COLUMN IF NOT EXISTS body_text TEXT"
+        )
         await conn.exec_driver_sql(
             "ALTER TABLE unified_emails "
             "ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE"

@@ -85,7 +85,9 @@ async def create_blocked_sender(
 
     Returns 409 if the (account_id, sender_email) pair already exists.
     """
-    stmt = select(BlockedSender).where(BlockedSender.sender_email == req.sender_email)
+    # Normalise once on write so the block matches case-insensitively later.
+    addr = (req.sender_email or "").strip().lower()
+    stmt = select(BlockedSender).where(BlockedSender.sender_email == addr)
     if req.account_id is None:
         stmt = stmt.where(BlockedSender.account_id.is_(None))
     else:
@@ -96,7 +98,7 @@ async def create_blocked_sender(
 
     blocked = BlockedSender(
         account_id=req.account_id,
-        sender_email=req.sender_email,
+        sender_email=addr,
         sender_name=req.sender_name,
         reason=req.reason,
     )
@@ -202,7 +204,8 @@ async def block_sender_by_email(
     if email is None:
         raise HTTPException(status_code=404, detail="Email not found")
 
-    sender_email = email.sender_email or ""
+    # Normalise once on write so the block matches case-insensitively later.
+    sender_email = (email.sender_email or "").strip().lower()
     if not sender_email:
         raise HTTPException(
             status_code=400, detail="Email has no sender_email to block"
@@ -225,10 +228,11 @@ async def block_sender_by_email(
     )
     db.add(blocked)
 
-    # Mark every mail from this sender as read in the same transaction.
+    # Mark every mail from this sender as read in the same transaction. Match
+    # case-insensitively: stored addresses may not be lower-cased.
     await db.execute(
         update(UnifiedEmail)
-        .where(UnifiedEmail.sender_email == sender_email)
+        .where(func.lower(func.trim(UnifiedEmail.sender_email)) == sender_email)
         .values(is_read=True)
     )
 

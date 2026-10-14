@@ -79,8 +79,8 @@ async def dashboard_pending(
     Widened from reply/review to the same window as the AI advisor so every
     priority-queue suggestion resolves to a displayable email in the UI.
     """
-    # Auto-handle stale emails first so they don't appear in the pending list.
-    await auto_handle_emails(db)
+    # Pure read: replied mail is handled at the source (app send / sent-folder
+    # sync set handled_at), so no write transaction runs on this polled path.
     emails = await get_schedule_candidates(db, limit=30)
     if account_id is not None:
         emails = [e for e in emails if e.account_id == account_id]

@@ -15,8 +15,8 @@ Design notes
   to support ad detection (Stage 6) without leaking excessive content.
 * Analysis columns (category, is_advertisement, ...) are nullable and populated
   in Stage 3. Defining them now avoids a schema migration later.
-* Per the privacy policy, only a ``body_snippet`` (truncated) is persisted; the
-  full body is fetched live when needed.
+* Per the privacy policy, only a ``body_snippet`` (truncated) is persisted by
+  default; the full body is fetched live on demand and then cached locally.
 """
 from __future__ import annotations
 
@@ -70,6 +70,12 @@ class UnifiedEmail(Base):
 
     # Truncated plain-text preview (<= ~500 chars) — full body fetched on demand.
     body_snippet: Mapped[str] = mapped_column(Text, default="")
+
+    # Full body cached on first on-demand fetch, so re-opening the same mail is
+    # a local read instead of a fresh IMAP/Graph round trip. NULL = never
+    # fetched (the live fetch still runs on first view).
+    body_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     received_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True

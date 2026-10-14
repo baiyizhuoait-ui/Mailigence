@@ -153,11 +153,18 @@ async def get_email(email_id: int, db: AsyncSession = Depends(get_db)) -> Unifie
 
 
 async def _fetch_full_body(db: AsyncSession, email: UnifiedEmail) -> dict:
-    """Fetch the full ``{html, text}`` body from the source mailbox.
+    """Fetch the full ``{html, text}`` body, caching it locally on first read.
 
-    Raises ``RuntimeError`` with a readable message when the body can't be
-    fetched (unreachable server, deleted message, ...) so callers can degrade.
+    A previously-fetched body (``body_html``/``body_text`` set) is served
+    straight from the database; only the first view of a mail goes back to the
+    source mailbox. Raises ``RuntimeError`` with a readable message when the
+    body can't be fetched (unreachable server, deleted message, ...) so callers
+    can degrade.
     """
+    # Cache hit: a previous fetch stored the rendered body locally.
+    if email.body_html is not None or email.body_text is not None:
+        return {"html": email.body_html or "", "text": email.body_text or ""}
+
     account = await db.get(EmailAccount, email.account_id)
     if account is None:
         raise RuntimeError("Account not found")
@@ -197,9 +204,17 @@ async def _fetch_full_body(db: AsyncSession, email: UnifiedEmail) -> dict:
         # view still shows readable content.
         snippet = (email.body_snippet or "").strip()
         if snippet:
-            return {"html": "", "text": snippet}
-        raise RuntimeError("Message body was not found on the server")
-    return {"html": body.get("html", ""), "text": body.get("text", "")}
+            result = {"html": "", "text": snippet}
+        else:
+            raise RuntimeError("Message body was not found on the server")
+    else:
+        result = {"html": body.get("html", ""), "text": body.get("text", "")}
+
+    # Persist so re-opening the same mail is a local read next time.
+    email.body_html = result["html"]
+    email.body_text = result["text"]
+    await db.commit()
+    return result
 
 
 @router.get("/{email_id}/full", response_model=FullBodyOut)
@@ -208,9 +223,9 @@ async def get_email_full_body(
 ) -> FullBodyOut:
     """Fetch the full message body on demand from the source mailbox.
 
-    Only a snippet is persisted; this endpoint goes back to the provider
-    (IMAP or Microsoft Graph) and returns the complete body so the user can
-    read the mail without leaving the app.
+    The first view goes back to the provider (IMAP or Microsoft Graph) and the
+    result is cached locally (``body_html``/``body_text``); later opens are a
+    plain database read.
     """
     email = await db.get(UnifiedEmail, email_id)
     if email is None:
@@ -357,6 +372,10 @@ async def send_reply(
 
     if not email.has_reply:
         email.has_reply = True
+    # Replied mail is done — set handled_at at the source so the dashboard and
+    # reply queue drop it without needing a write on every /pending read.
+    if email.handled_at is None:
+        email.handled_at = datetime.now(timezone.utc)
     await db.commit()
     return {"ok": True, "sent_id": sent_id}
 

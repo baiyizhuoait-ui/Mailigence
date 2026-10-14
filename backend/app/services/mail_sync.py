@@ -152,18 +152,36 @@ async def apply_read_flags(
     """
     if not flags:
         return 0
-    updated = 0
+    # Group target Message-IDs by desired read state so we issue at most two
+    # bulk UPDATEs instead of one statement per message (N+1 -> 2 round trips).
+    to_read: list[str] = []
+    to_unread: list[str] = []
     for uid, is_read in flags.items():
         mid = uid_to_mid.get(uid)
         if not mid:
             continue
+        (to_read if is_read else to_unread).append(mid)
+    updated = 0
+    if to_read:
         result = await db.execute(
             update(UnifiedEmail)
             .where(
                 UnifiedEmail.account_id == account_id,
-                UnifiedEmail.message_id == mid,
+                UnifiedEmail.message_id.in_(to_read),
+                UnifiedEmail.is_read.is_(False),
             )
-            .values(is_read=is_read)
+            .values(is_read=True)
+        )
+        updated += result.rowcount or 0
+    if to_unread:
+        result = await db.execute(
+            update(UnifiedEmail)
+            .where(
+                UnifiedEmail.account_id == account_id,
+                UnifiedEmail.message_id.in_(to_unread),
+                UnifiedEmail.is_read.is_(True),
+            )
+            .values(is_read=False)
         )
         updated += result.rowcount or 0
     if updated:

@@ -50,15 +50,18 @@ function priorityClass(score: number | null): string {
 // or phishing mail can't phone home: with `img-src data: cid:` remote tracking
 // pixels stay blocked (no IP / read-time leak). The user can opt in per mail
 // via the "load remote images" toggle, which widens img-src to http(s).
+//
+// The CSP <meta> is ALWAYS emitted as the first child of our own <head>, never
+// spliced into the mail's own markup: regex-matching the mail's <head> was
+// bypassable (e.g. a leading `<!-- <head> -->` comment swallowed the meta).
+// The browser honours the earliest CSP meta in document order, and the mail's
+// own (ignored-in-body) html/head tags can't precede ours.
 function buildIframeDoc(html: string, allowRemoteImages: boolean): string {
   const imgSrc = allowRemoteImages ? "data: cid: http: https:" : "data: cid:";
   const csp =
     `default-src 'none'; style-src 'unsafe-inline'; ` +
     `img-src ${imgSrc}; font-src data:;`;
   const meta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
-  if (/<head[\s>]/i.test(html)) {
-    return html.replace(/<head([^>]*)>/i, `<head$1>${meta}`);
-  }
   return (
     `<!DOCTYPE html><html><head><meta charset="utf-8">${meta}</head>` +
     `<body>${html}</body></html>`
@@ -78,6 +81,9 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
   // Per-mail opt-in to load remote images in the HTML preview (off = privacy).
   const [loadRemoteImages, setLoadRemoteImages] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Watches the framed document so the iframe keeps growing as remote images
+  // (or web fonts) finish loading after the initial onLoad fires.
+  const resizeObsRef = useRef<ResizeObserver | null>(null);
   // ---- AI reply drafts ----
   const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
   const [draftOpen, setDraftOpen] = useState(false);
@@ -311,6 +317,41 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
     };
   }, [emailId, onReadChange]);
 
+  // Grow the framed document to its full height so the user scrolls a single
+  // container instead of fighting nested scrollbars. No upper cap: long mails
+  // stay fully readable (the outer modal-body already scrolls).
+  const syncFrameHeight = () => {
+    const frame = iframeRef.current;
+    const doc = frame?.contentDocument;
+    if (!frame || !doc?.body) return;
+    const h = Math.max(doc.body.scrollHeight + 16, 320);
+    frame.style.height = `${h}px`;
+  };
+
+  // Measure once on load, then keep re-measuring via ResizeObserver: remote
+  // images load asynchronously and would otherwise be clipped below the fold.
+  const attachFrameObserver = () => {
+    const frame = iframeRef.current;
+    const doc = frame?.contentDocument;
+    if (!frame || !doc?.body) return;
+    syncFrameHeight();
+    resizeObsRef.current?.disconnect();
+    try {
+      const obs = new ResizeObserver(() => syncFrameHeight());
+      obs.observe(doc.body);
+      resizeObsRef.current = obs;
+    } catch {
+      /* ResizeObserver unavailable — the onLoad measurement still applies */
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      resizeObsRef.current?.disconnect();
+      resizeObsRef.current = null;
+    };
+  }, []);
+
   if (emailId === null) return null;
 
   const analyzed = email?.analyzed_at !== null && email?.analyzed_at !== undefined;
@@ -399,22 +440,7 @@ export function EmailDetailPanel({ emailId, onClose, onReadChange }: Props) {
                         sandbox="allow-same-origin"
                         srcDoc={buildIframeDoc(fullBody.html, loadRemoteImages)}
                         title={t("detail.viewFull")}
-                        onLoad={(e) => {
-                          // Grow to fit the mail so the user scrolls one
-                          // container instead of nested scrollbars.
-                          try {
-                            const doc = e.currentTarget.contentDocument;
-                            if (doc?.body) {
-                              const h = Math.min(
-                                Math.max(doc.body.scrollHeight + 16, 320),
-                                2000,
-                              );
-                              e.currentTarget.style.height = `${h}px`;
-                            }
-                          } catch {
-                            /* opaque origin — keep the CSS min-height */
-                          }
-                        }}
+                        onLoad={attachFrameObserver}
                       />
                     </>
                   ) : (

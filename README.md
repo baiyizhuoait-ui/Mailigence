@@ -99,9 +99,9 @@ docker compose up -d
 
 ### Windows 免 Docker 一键启动（start.bat / start.ps1）
 
-无需 Docker，环境要求：**Python 3.11+**、**Node.js 18+**（安装时勾选加入 PATH）
+无需 Docker，环境要求：**Python 3.11 或 3.12**（3.13+ 缺少依赖 wheel，可用环境变量 `MAILIGENCE_PYTHON` 指定解释器路径）、**Node.js 18+**（安装时勾选加入 PATH）
 
-1. 双击项目根目录的 `start.bat`（或运行 `.\start.ps1`）
+1. 双击项目根目录的 `start.bat`，或在 PowerShell 中运行 `powershell -ExecutionPolicy Bypass -File start.ps1`
 2. 首次运行脚本会自动完成以下全部步骤：
    - 检测 PostgreSQL —— 优先使用项目内置便携版 `\.pginstall\pgsql`，没有则用系统安装版
    - 首次自动 `initdb` 初始化数据目录并启动数据库

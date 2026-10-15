@@ -107,9 +107,9 @@ Notes:
 
 ### Windows — one-click start without Docker (start.bat / start.ps1)
 
-Requirements: **Python 3.11+** and **Node.js 18+** (add both to PATH during install).
+Requirements: **Python 3.11 or 3.12** (3.13+ has no wheels for the pinned deps — set `MAILIGENCE_PYTHON` to point at a 3.11/3.12 interpreter) and **Node.js 18+** (add both to PATH during install).
 
-1. Double-click `start.bat` (or run `.\start.ps1`) in the project root.
+1. Double-click `start.bat` in the project root, or run `powershell -ExecutionPolicy Bypass -File start.ps1` from PowerShell.
 2. On first run the script automatically:
    - Detects PostgreSQL (prefers the bundled portable build at `\.pginstall\pgsql`, falls back to a system install)
    - Runs `initdb` and starts the database on first launch
